@@ -9,7 +9,7 @@ import Foundation
 import AVFoundation
 import Observation
 import MediaPlayer
-import UIKit // Needed for UIImage
+import UIKit
 
 @Observable @MainActor
 final class AudioEngine {
@@ -23,8 +23,8 @@ final class AudioEngine {
     // MARK: - Dependencies
     private let provider: AssetProvider
     private let stateStore: PlaybackPersistence
-    private let repo: MusicRepository      // ✅ NEW
-    private let client: NavidromeClient    // ✅ NEW
+    private let repo: MusicRepository
+    private let client: NavidromeClient
     
     private let player = AVQueuePlayer()
     private var timeObserver: Any?
@@ -68,33 +68,77 @@ final class AudioEngine {
         
         self.currentSongId = currentId
         
-        // ✅ FIX: Play FIRST so the system knows we are active
-        play()
-        
-        // ✅ FIX: Update Info immediately AFTER playing
-        self.nowPlayingInfo = [
-            MPMediaItemPropertyTitle: "Loading...",
-            MPNowPlayingInfoPropertyPlaybackRate: 1.0,
-            MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0
-        ]
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
-        
-        // 3. Fetch Rich Metadata (Async)
+        // ✅ FIXED: Use modern async API for duration
+        // 2. Get initial duration asynchronously
         Task {
-            await loadMetadata(for: currentId)
+            let durationValue = await getDuration()
+            
+            self.nowPlayingInfo = [
+                MPMediaItemPropertyTitle: "Loading...",
+                MPMediaItemPropertyArtist: "Unknown Artist",
+                MPMediaItemPropertyAlbumTitle: "",
+                MPMediaItemPropertyPlaybackDuration: duration > 0 ? duration : 180.0,
+                MPNowPlayingInfoPropertyPlaybackRate: 0.0,
+                MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0
+            ]
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+            
+            print("✅ Initial metadata set: \(nowPlayingInfo.keys.count) keys")
+            print("   Title: \(nowPlayingInfo[MPMediaItemPropertyTitle] as? String ?? "nil")")
+            print("   Duration: \(nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] as? Double ?? -1)")
+            
+            // ✅ NEW: Verify what the system actually has
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                let systemInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo
+                print("🔍 System Now Playing Info after 0.1s: \(systemInfo?.keys.count ?? 0) keys")
+                if let title = systemInfo?[MPMediaItemPropertyTitle] as? String {
+                    print("   System Title: \(title)")
+                }
+            }
+            
+            // 4. Start playback
+            play()
+            
+            // 5. Fetch rich metadata
+            Task {
+                await loadMetadata(for: currentId)
+            }
+        }
+    }
+    
+    // ✅ NEW: Helper to get duration using modern API
+    private func getDuration() async -> Double {
+        guard let item = player.currentItem else { return 180.0 }
+        
+        do {
+            // Modern API: load specific properties
+            let duration = try await item.asset.load(.duration)
+            let seconds = duration.seconds
+            return seconds.isFinite && seconds > 0 ? seconds : 180.0
+        } catch {
+            print("⚠️ Failed to load duration: \(error)")
+            return 180.0 // Fallback
         }
     }
 
     func play() {
         player.play()
         isPlaying = true
-        updatePlaybackRate() // Update Lock Screen state
+        
+        // Only update playback rate
+        nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = 1.0
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        
+        print("▶️ Now playing with \(nowPlayingInfo.keys.count) metadata keys")
     }
     
     func pause() {
         player.pause()
         isPlaying = false
-        updatePlaybackRate() // Update Lock Screen state
+        
+        nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = 0.0
+        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentTime().seconds
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
     }
     
     func skipToNext() {
@@ -112,6 +156,11 @@ final class AudioEngine {
         nowPlayingInfo[MPMediaItemPropertyTitle] = song.title
         nowPlayingInfo[MPMediaItemPropertyArtist] = song.artist?.name ?? "Unknown Artist"
         nowPlayingInfo[MPMediaItemPropertyAlbumTitle] = song.album?.title ?? ""
+        
+        // Update duration from DB if available
+        if song.duration > 0 {
+            nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = song.duration
+        }
         
         // Push Text Update Immediately (Before waiting for image)
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
@@ -133,10 +182,26 @@ final class AudioEngine {
     }
 
     private func updatePlaybackRate() {
+        // Guard against empty metadata
+        guard !nowPlayingInfo.isEmpty else { return }
+        
         // Keep lock screen in sync with play/pause state
         nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
         nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentTime().seconds
-        nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = player.currentItem?.duration.seconds
+        
+        // ✅ FIXED: Use modern API for duration
+        Task {
+            if let item = player.currentItem {
+                do {
+                    let duration = try await item.asset.load(.duration)
+                    if duration.seconds.isFinite && duration.seconds > 0 {
+                        nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = duration.seconds
+                    }
+                } catch {
+                    // Silently fail - we already have a fallback duration
+                }
+            }
+        }
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
     }
@@ -173,8 +238,10 @@ final class AudioEngine {
     
     private func updateProgress(time: CMTime) {
         guard let item = player.currentItem else { return }
-        let dur = item.duration.seconds
-        if dur.isFinite && dur > 0 {
+        
+        // ✅ Use cached duration from nowPlayingInfo instead of deprecated API
+        if let dur = nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] as? Double,
+           dur > 0 {
             self.progress = time.seconds / dur
             self.duration = dur
         }
