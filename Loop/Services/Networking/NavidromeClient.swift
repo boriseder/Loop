@@ -11,7 +11,12 @@ import CryptoKit
 
 // MARK: - 1. Safe DTO Definitions
 
-nonisolated(unsafe) struct SubsonicResponse: Decodable, Sendable {
+// MARK: - 1. Safe DTO Definitions
+
+// ✅ FIX: Use 'nonisolated' to opt-out of the project's "Default Main Actor" setting.
+// This makes the struct neutral, so the Background Actor can decode it.
+
+nonisolated struct SubsonicResponse: Decodable, Sendable {
     let subsonicResponse: ResponseBody
     
     enum CodingKeys: String, CodingKey {
@@ -19,15 +24,15 @@ nonisolated(unsafe) struct SubsonicResponse: Decodable, Sendable {
     }
 }
 
-nonisolated(unsafe) struct ResponseBody: Decodable, Sendable {
+nonisolated struct ResponseBody: Decodable, Sendable {
     let albumList2: AlbumList?
 }
 
-nonisolated(unsafe) struct AlbumList: Decodable, Sendable {
+nonisolated struct AlbumList: Decodable, Sendable {
     let album: [RemoteAlbum]?
 }
 
-nonisolated(unsafe) struct RemoteAlbum: Decodable, Sendable {
+nonisolated struct RemoteAlbum: Decodable, Sendable {
     let id: String
     let name: String
     let artist: String
@@ -37,21 +42,21 @@ nonisolated(unsafe) struct RemoteAlbum: Decodable, Sendable {
 }
 
 // MARK: - Album Details DTOs
-nonisolated(unsafe)  struct SubsonicGetAlbumResponse: Decodable, Sendable {
+nonisolated struct SubsonicGetAlbumResponse: Decodable, Sendable {
     let subsonicResponse: GetAlbumBody
     enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
 }
 
-nonisolated(unsafe)  struct GetAlbumBody: Decodable, Sendable {
+nonisolated struct GetAlbumBody: Decodable, Sendable {
     let album: RemoteAlbumDetails?
 }
 
-nonisolated(unsafe)  struct RemoteAlbumDetails: Decodable, Sendable {
+nonisolated struct RemoteAlbumDetails: Decodable, Sendable {
     let id: String
     let song: [RemoteSong]?
 }
 
-nonisolated(unsafe)  struct RemoteSong: Decodable, Sendable {
+nonisolated struct RemoteSong: Decodable, Sendable {
     let id: String
     let title: String
     let track: Int?
@@ -216,8 +221,11 @@ extension NavidromeClient: URLSessionDelegate {
     }
 }
 
+// MARK: - Salt Generator Extension
 private extension String {
-    static func randomSalt(length: Int = 6) -> String {
+    // ✅ FIX: Explicitly mark as nonisolated.
+    // This tells Swift: "This function is pure logic, touches no actors, and is safe everywhere."
+    nonisolated static func randomSalt(length: Int = 6) -> String {
         let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         return String((0..<length).map { _ in letters.randomElement()! })
     }

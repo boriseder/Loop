@@ -68,33 +68,21 @@ final class AudioEngine {
         
         self.currentSongId = currentId
         
-        // ✅ FIXED: Use modern async API for duration
         // 2. Get initial duration asynchronously
         Task {
+            // ✅ We fetch the real duration here
             let durationValue = await getDuration()
             
             self.nowPlayingInfo = [
                 MPMediaItemPropertyTitle: "Loading...",
                 MPMediaItemPropertyArtist: "Unknown Artist",
                 MPMediaItemPropertyAlbumTitle: "",
-                MPMediaItemPropertyPlaybackDuration: duration > 0 ? duration : 180.0,
+                // ✅ FIX: Use 'durationValue' (the fetched value), not 'duration' (which is 0.0)
+                MPMediaItemPropertyPlaybackDuration: durationValue,
                 MPNowPlayingInfoPropertyPlaybackRate: 0.0,
                 MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0
             ]
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
-            
-            print("✅ Initial metadata set: \(nowPlayingInfo.keys.count) keys")
-            print("   Title: \(nowPlayingInfo[MPMediaItemPropertyTitle] as? String ?? "nil")")
-            print("   Duration: \(nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] as? Double ?? -1)")
-            
-            // ✅ NEW: Verify what the system actually has
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                let systemInfo = MPNowPlayingInfoCenter.default().nowPlayingInfo
-                print("🔍 System Now Playing Info after 0.1s: \(systemInfo?.keys.count ?? 0) keys")
-                if let title = systemInfo?[MPMediaItemPropertyTitle] as? String {
-                    print("   System Title: \(title)")
-                }
-            }
             
             // 4. Start playback
             play()
@@ -105,7 +93,7 @@ final class AudioEngine {
             }
         }
     }
-    
+
     // ✅ NEW: Helper to get duration using modern API
     private func getDuration() async -> Double {
         guard let item = player.currentItem else { return 180.0 }
@@ -120,7 +108,7 @@ final class AudioEngine {
             return 180.0 // Fallback
         }
     }
-
+    
     func play() {
         player.play()
         isPlaying = true
@@ -180,7 +168,7 @@ final class AudioEngine {
             }
         }
     }
-
+    
     private func updatePlaybackRate() {
         // Guard against empty metadata
         guard !nowPlayingInfo.isEmpty else { return }
@@ -237,9 +225,10 @@ final class AudioEngine {
     }
     
     private func updateProgress(time: CMTime) {
-        guard let item = player.currentItem else { return }
+        // FIX: Check if an item exists, but don't bind it to a variable we won't use.
+        guard player.currentItem != nil else { return }
         
-        // ✅ Use cached duration from nowPlayingInfo instead of deprecated API
+        // Use cached duration from nowPlayingInfo
         if let dur = nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] as? Double,
            dur > 0 {
             self.progress = time.seconds / dur
