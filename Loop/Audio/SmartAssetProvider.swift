@@ -1,43 +1,37 @@
+//
+//  SmartAssetProvider.swift
+//  Loop
+//
+//  Created by Architecture Blueprint v6.3
+//
+
 import Foundation
 import AVFoundation
 
+/// A smart provider that decides whether to serve a local file or a remote stream.
+/// It wraps the DownloadManager to keep logic clean.
 final class SmartAssetProvider: AssetProvider {
-    private let downloads: DownloadManager
-    private let networkMonitor: NetworkMonitor
+    
+    private let downloadManager: DownloadManager
     private let client: NavidromeClient
     
-    // ✅ Keep a strong reference to the delegate
-    private let securityDelegate = SecurityDelegate()
-    
-    init(downloads: DownloadManager, networkMonitor: NetworkMonitor, client: NavidromeClient) {
-        self.downloads = downloads
-        self.networkMonitor = networkMonitor
+    init(downloadManager: DownloadManager, client: NavidromeClient) {
+        self.downloadManager = downloadManager
         self.client = client
     }
     
-    func asset(for songId: String) -> AVURLAsset? {
-        // Path A: Local File (Downloads)
-        if let localURL = downloads.localFileURL(for: songId),
-           FileManager.default.fileExists(atPath: localURL.path) {
+    // MARK: - AssetProvider Conformance
+    
+    func asset(for songId: String) -> AVAsset? {
+        // 1. Check Local File (Offline)
+        // ✅ FIX: Now calling the method we added to DownloadManager above
+        if let localURL = downloadManager.localFileURL(for: songId),
+           FileManager.default.fileExists(atPath: localURL.path(percentEncoded: false)) {
             return AVURLAsset(url: localURL)
         }
         
-        // Path B: Remote Stream
-        guard networkMonitor.isReachable else { return nil }
-        
-        if let remoteURL = client.streamURL(for: songId) {
-            let asset = AVURLAsset(url: remoteURL)
-            
-            // ✅ FIX: Attach the security delegate to allow self-signed certs
-            asset.resourceLoader.setDelegate(securityDelegate, queue: DispatchQueue.global(qos: .userInitiated))
-            
-            return asset
-        }
-        return nil
-    }
-    
-    func isAvailable(songId: String) -> Bool {
-        if downloads.isPinned(songId) { return true }
-        return networkMonitor.isReachable
+        // 2. Fallback to Remote Stream (Online)
+        guard let remoteURL = client.streamURL(for: songId) else { return nil }
+        return AVURLAsset(url: remoteURL)
     }
 }

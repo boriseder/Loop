@@ -11,17 +11,59 @@ import CryptoKit
 
 // MARK: - 1. Safe DTO Definitions
 
-// MARK: - 1. Safe DTO Definitions
+// --- Search DTOs ---
+nonisolated struct SubsonicSearchResponse: Decodable, Sendable {
+    let subsonicResponse: SearchResponseBody
+    enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
+}
 
-// ✅ FIX: Use 'nonisolated' to opt-out of the project's "Default Main Actor" setting.
-// This makes the struct neutral, so the Background Actor can decode it.
+nonisolated struct SearchResponseBody: Decodable, Sendable {
+    let searchResult3: SearchResult3?
+}
+
+nonisolated struct SearchResult3: Decodable, Sendable {
+    let song: [RemoteSong]?
+    let album: [RemoteAlbum]?
+    let artist: [RemoteArtist]?
+}
+
+nonisolated struct RemoteArtist: Decodable, Sendable {
+    let id: String
+    let name: String
+    let albumCount: Int?
+}
+
+// --- Artist Detail DTOs ---
+nonisolated struct SubsonicGetArtistResponse: Decodable, Sendable {
+    let subsonicResponse: GetArtistBody
+    enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
+}
+
+nonisolated struct GetArtistBody: Decodable, Sendable {
+    let artist: RemoteArtistDetail?
+}
+
+nonisolated struct RemoteArtistDetail: Decodable, Sendable {
+    let id: String
+    let name: String
+    let album: [RemoteAlbum]?
+}
+
+// --- Song Detail DTO (New) ---
+nonisolated struct SubsonicGetSongResponse: Decodable, Sendable {
+    let subsonicResponse: GetSongBody
+    enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
+}
+
+nonisolated struct GetSongBody: Decodable, Sendable {
+    let song: RemoteSong?
+}
+
+// -------------------
 
 nonisolated struct SubsonicResponse: Decodable, Sendable {
     let subsonicResponse: ResponseBody
-    
-    enum CodingKeys: String, CodingKey {
-        case subsonicResponse = "subsonic-response"
-    }
+    enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
 }
 
 nonisolated struct ResponseBody: Decodable, Sendable {
@@ -53,6 +95,11 @@ nonisolated struct GetAlbumBody: Decodable, Sendable {
 
 nonisolated struct RemoteAlbumDetails: Decodable, Sendable {
     let id: String
+    let name: String
+    let artist: String
+    let artistId: String
+    let coverArt: String?
+    let year: Int?
     let song: [RemoteSong]?
 }
 
@@ -62,26 +109,18 @@ nonisolated struct RemoteSong: Decodable, Sendable {
     let track: Int?
     let duration: Int?
     let path: String?
+    
+    // Search & Detail fields
+    let artist: String?
+    let album: String?
+    let coverArt: String?
+    
+    // ✅ ADDED: Required for linking orphaned songs to albums
+    let albumId: String?
 }
 
 // MARK: - 2. The Client Actor
 
-// ✅ FIX: Inherit from NSObject to be a URLSessionDelegate
-//
-//  NavidromeClient.swift
-//  Loop
-//
-//  Created by Architecture Blueprint v6.3
-//
-
-import Foundation
-import OSLog
-import CryptoKit
-
-// ... [Keep all your DTO structs at the top: SubsonicResponse, etc.] ...
-// ... [Keep structs: SubsonicGetAlbumResponse, etc.] ...
-
-// ✅ FIX: Inherit from NSObject to be a URLSessionDelegate
 actor NavidromeClient: NSObject {
     
     // MARK: - Configuration
@@ -133,7 +172,6 @@ actor NavidromeClient: NSObject {
         return components?.url
     }
     
-    // ✅ NEW: Cover Art URL Generator
     nonisolated func coverArtURL(id: String, size: Int = 300) -> URL? {
         return buildURL(endpoint: "getCoverArt", params: [
             "id": id,
@@ -141,12 +179,48 @@ actor NavidromeClient: NSObject {
         ])
     }
     
+    // MARK: - Search
+    func search(query: String) async throws -> ([RemoteSong], [RemoteAlbum], [RemoteArtist]) {
+        let params: [String: String] = [
+            "query": query,
+            "songCount": "20",
+            "albumCount": "10",
+            "artistCount": "10"
+        ]
+        
+        guard let url = buildURL(endpoint: "search3", params: params) else {
+            throw URLError(.badURL)
+        }
+        
+        let response: SubsonicSearchResponse = try await fetch(url: url)
+        let result = response.subsonicResponse.searchResult3
+        
+        return (result?.song ?? [], result?.album ?? [], result?.artist ?? [])
+    }
+    
+    // MARK: - Artist Details
+    func fetchArtist(id: String) async throws -> RemoteArtistDetail? {
+        let response: SubsonicGetArtistResponse = try await fetch("getArtist", params: ["id": id])
+        return response.subsonicResponse.artist
+    }
+    
+    // MARK: - Song Details (New)
+    func fetchSong(id: String) async throws -> RemoteSong? {
+        let response: SubsonicGetSongResponse = try await fetch("getSong", params: ["id": id])
+        return response.subsonicResponse.song
+    }
+    
+    // Standard fetch with endpoint string
     func fetch<T: Decodable & Sendable>(_ endpoint: String, params: [String: String] = [:]) async throws -> T {
         guard let url = buildURL(endpoint: endpoint, params: params) else {
             throw URLError(.badURL)
         }
-        
-        logger.debug("Fetching: \(endpoint)")
+        return try await fetch(url: url)
+    }
+    
+    // Generic fetch with raw URL
+    func fetch<T: Decodable & Sendable>(url: URL) async throws -> T {
+        logger.debug("Fetching URL: \(url.absoluteString)")
         
         let (data, response) = try await session.data(from: url)
         
@@ -158,8 +232,6 @@ actor NavidromeClient: NSObject {
         return try JSONDecoder().decode(T.self, from: data)
     }
     
-    // MARK: - Image Fetching
-        
     func downloadData(from url: URL) async throws -> Data {
         let (data, response) = try await session.data(from: url)
         
@@ -206,7 +278,7 @@ actor NavidromeClient: NSObject {
     }
 }
 
-// MARK: - URLSessionDelegate (Self-Signed Cert Logic)
+// MARK: - URLSessionDelegate
 extension NavidromeClient: URLSessionDelegate {
     nonisolated func urlSession(_ session: URLSession,
                                 didReceive challenge: URLAuthenticationChallenge,
@@ -221,10 +293,7 @@ extension NavidromeClient: URLSessionDelegate {
     }
 }
 
-// MARK: - Salt Generator Extension
 private extension String {
-    // ✅ FIX: Explicitly mark as nonisolated.
-    // This tells Swift: "This function is pure logic, touches no actors, and is safe everywhere."
     nonisolated static func randomSalt(length: Int = 6) -> String {
         let letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         return String((0..<length).map { _ in letters.randomElement()! })

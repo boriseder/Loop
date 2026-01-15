@@ -7,14 +7,14 @@
 
 import SwiftUI
 import SwiftData
-import AVFoundation // ⚠️ CRITICAL: This import fixes the "Cannot find AVAudioSession" error
+import AVFoundation
 
 @main
 struct LoopApp: App {
     @State private var container = AppContainer()
     
-    // Configure Global Cache on Init
     init() {
+        // Configure Global Cache
         URLCache.shared = URLCache(
             memoryCapacity: 100 * 1024 * 1024,
             diskCapacity: 500 * 1024 * 1024,
@@ -24,34 +24,54 @@ struct LoopApp: App {
     
     var body: some Scene {
         WindowGroup {
+            // ✅ FIX: Create a Bindable proxy for the router
             @Bindable var router = container.router
             
-            NavigationStack(path: $router.path) {
-                LibraryView()
-                    .navigationDestination(for: Router.Destination.self) { destination in
-                        switch destination {
-                        case .albumDetail(let id):
-                            AlbumDetailView(albumId: id)
-                        case .artistDetail(let id):
-                            Text("Artist \(id)")
-                        case .player:
-                            Text("Full Player")
-                        case .settings:
-                            Text("Settings")
-                        }
+            // We use a ZStack to float the MiniPlayer above the TabBar
+            ZStack(alignment: .bottom) {
+                
+                // 1. Main Tab Interface
+                TabView {
+                    // TAB 1: Library
+                    NavigationStack(path: $router.path) {
+                        LibraryView()
+                            .navigationDestination(for: Router.Destination.self) { destination in
+                                switch destination {
+                                case .albumDetail(let id):
+                                    AlbumDetailView(albumId: id)
+                                case .artistDetail(let id):
+                                    Text("Artist \(id)") // Placeholder for now
+                                case .player:
+                                    Text("Full Player")
+                                case .settings:
+                                    Text("Settings")
+                                }
+                            }
                     }
-            }
-            .overlay(alignment: .bottom) {
+                    .tabItem {
+                        Label("Library", systemImage: "music.note.list")
+                    }
+                    
+                    // TAB 2: Search (Independent Stack)
+                    SearchView()
+                        .tabItem {
+                            Label("Search", systemImage: "magnifyingglass")
+                        }
+                }
+                // IMPORTANT: Add padding to prevent content from being hidden behind MiniPlayer
+                .safeAreaPadding(.bottom, container.audio.currentSongId != nil ? 60 : 0)
+                
+                // 2. Global Mini Player Overlay
                 if container.audio.currentSongId != nil {
                     MiniPlayerView()
+                        .padding(.bottom, 49) // Lift above standard TabBar height
+                        .transition(.move(edge: .bottom))
                 }
             }
             .environment(container)
             .onAppear {
-                // 1. Tell the system we want to handle remote controls
+                // System Setup
                 UIApplication.shared.beginReceivingRemoteControlEvents()
-                
-                // 2. Activate Audio Session
                 do {
                     try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
                     try AVAudioSession.sharedInstance().setActive(true)

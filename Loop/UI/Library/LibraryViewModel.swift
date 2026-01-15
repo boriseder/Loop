@@ -6,103 +6,97 @@
 //
 
 import SwiftUI
-import SwiftData
 import Observation
 import OSLog
 
 @Observable @MainActor
 final class LibraryViewModel {
     
-    // MARK: - State
-    var albums: [Album] = []
-    var isLoading: Bool = false
+    // MARK: - Enums
+    enum LibraryScope: String, CaseIterable, Identifiable {
+        case albums = "Albums"
+        case artists = "Artists"
+        var id: Self { self }
+    }
     
-    // ✅ NEW: Localized status message for UI feedback
+    // MARK: - State
+    var selectedScope: LibraryScope = .albums
+    
+    var albums: [Album] = []
+    var artists: [Artist] = [] // ✅ Added
+    
+    var isLoading = false
+    var errorMessage: String?
     var statusMessage: String?
     
-    // Pagination State
-    private var currentOffset = 0
-    private let limit = 100
-    private var canLoadMore = true
+    // Local Filter
+    var searchText: String = ""
     
-    // Dependencies
+    // ✅ Computed property to switch data source based on Scope
+    var filteredItems: [any Identifiable] {
+        switch selectedScope {
+        case .albums:
+            guard !searchText.isEmpty else { return albums }
+            return albums.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+        case .artists:
+            guard !searchText.isEmpty else { return artists }
+            return artists.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+        }
+    }
+    
+    // MARK: - Dependencies
     private let repo: MusicRepository
-    private let logger = Logger(subsystem: "com.loopapp", category: "LibraryViewModel")
+    private let downloads: DownloadManager
+    private let logger = Logger(subsystem: "com.loopapp", category: "Library")
     
-    init(repo: MusicRepository) {
+    init(repo: MusicRepository, downloads: DownloadManager) {
         self.repo = repo
+        self.downloads = downloads
     }
     
     // MARK: - Actions
     
     func loadInitialData() async {
         isLoading = true
+        errorMessage = nil
+        statusMessage = "Loading library..."
+        
+        do {
+            // 1. Load Local Cache
+            async let fetchedAlbums = repo.getAlbums(limit: 500) // Increased limit for library view
+            async let fetchedArtists = repo.getArtists()
+            
+            let (newAlbums, newArtists) = try await (fetchedAlbums, fetchedArtists)
+            
+            self.albums = newAlbums
+            self.artists = newArtists
+            
+            // 2. Trigger Background Sync
+            performSync()
+            
+        } catch {
+            logger.error("Failed to load library: \(error)")
+            errorMessage = "Failed to load library."
+        }
+        
+        isLoading = false
         statusMessage = nil
-        
-        // Reset pagination
-        currentOffset = 0
-        canLoadMore = true
-        
-        do {
-            let localAlbums = try await repo.getAlbums(limit: limit, offset: 0)
-            
-            if !localAlbums.isEmpty {
-                self.albums = localAlbums
-                if localAlbums.count < limit { canLoadMore = false }
-                logger.info("✅ Loaded \(localAlbums.count) albums from cache.")
-            } else {
-                logger.info("⚠️ Database empty. Triggering auto-sync...")
-                // ✅ Localized status
-                statusMessage = String(localized: "Syncing Library...", comment: "Status message during initial sync")
-                await performSync()
-            }
-        } catch {
-            logger.error("❌ Error loading library: \(error)")
-            statusMessage = String(localized: "Failed to load library.", comment: "Error message when loading fails")
-        }
-        
-        isLoading = false
     }
     
-    func performSync() async {
-        isLoading = true
-        do {
-            try await repo.syncAlbums()
-            
-            // Reload fresh data
-            self.albums = try await repo.getAlbums(limit: limit, offset: 0)
-            currentOffset = 0
-            canLoadMore = (self.albums.count >= limit)
-            
-            logger.info("✅ Sync complete. Displaying \(self.albums.count) albums.")
-            statusMessage = nil // Clear status on success
-            
-        } catch {
-            logger.error("❌ Sync failed: \(error)")
-            statusMessage = String(localized: "Sync failed. Please check connection.", comment: "Error message when sync fails")
-        }
-        isLoading = false
-    }
-    
-    func loadMore() async {
-        guard canLoadMore, !isLoading else { return }
-        
-        isLoading = true
-        currentOffset += limit
-        
-        do {
-            let nextBatch = try await repo.getAlbums(limit: limit, offset: currentOffset)
-            
-            if nextBatch.isEmpty {
-                canLoadMore = false
-            } else {
-                self.albums.append(contentsOf: nextBatch)
-                if nextBatch.count < limit { canLoadMore = false }
+    func performSync() {
+        Task {
+            statusMessage = "Syncing..."
+            do {
+                try await repo.syncAlbums()
+                
+                // Refresh Data
+                self.albums = try await repo.getAlbums(limit: 500)
+                self.artists = try await repo.getArtists()
+                
+            } catch {
+                logger.error("Sync failed: \(error)")
             }
-        } catch {
-            logger.error("❌ Pagination Error: \(error)")
+            statusMessage = nil
         }
-        
-        isLoading = false
     }
 }

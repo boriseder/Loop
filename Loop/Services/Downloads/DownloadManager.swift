@@ -6,95 +6,114 @@
 //
 
 import Foundation
+import AVFoundation
 import Observation
 import OSLog
 
-@Observable @MainActor
-final class DownloadManager: NSObject {
+@Observable
+final class DownloadManager: AssetProvider {
     
     // MARK: - State
-    var activeDownloads: [String: Double] = [:] // SongID : Progress
+    var activeDownloads: Set<String> = []
     
     // MARK: - Dependencies
     private let client: NavidromeClient
+    private let fileManager = FileManager.default
     private let logger = Logger(subsystem: "com.loopapp", category: "DownloadManager")
     
-    // MARK: - Session
-    private var session: URLSession!
-    private var backgroundCompletionHandler: (() -> Void)?
+    // MARK: - Paths
+    private var documentsDirectory: URL {
+        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+    
+    private var downloadsDirectory: URL {
+        documentsDirectory.appendingPathComponent("LoopDownloads", conformingTo: .directory)
+    }
     
     init(client: NavidromeClient) {
         self.client = client
-        super.init()
-        
-        let config = URLSessionConfiguration.background(withIdentifier: "com.loop.background.downloads")
-        config.isDiscretionary = false
-        config.sessionSendsLaunchEvents = true
-        
-        self.session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        try? fileManager.createDirectory(at: downloadsDirectory, withIntermediateDirectories: true)
     }
     
-    func download(song: Song) {
-        if isPinned(song.id) { return }
+    // MARK: - Actions
+    
+    func download(song: Song) async {
+        guard !isPinned(songId: song.id) else { return }
         
-        guard let url = client.streamURL(for: song.id) else { return }
+        // ✅ FIX: Suppress unused result warning
+        _ = await MainActor.run { activeDownloads.insert(song.id) }
+        defer { Task { @MainActor in activeDownloads.remove(song.id) } }
         
-        let task = session.downloadTask(with: url)
-        task.taskDescription = song.id
-        task.resume()
+        logger.info("⬇️ Starting download for: \(song.title)")
         
-        activeDownloads[song.id] = 0.0
+        do {
+            // 1. Get Stream URL
+            guard let remoteURL = client.streamURL(for: song.id) else {
+                throw URLError(.badURL)
+            }
+            
+            // 2. Download Data
+            let data = try await client.downloadData(from: remoteURL)
+            
+            // 3. Save to Disk
+            guard let localURL = localFileURL(for: song.id) else { return }
+            try data.write(to: localURL)
+            
+            logger.info("✅ Download complete: \(song.title)")
+            
+            // 4. Optionally download Cover Art
+            if let coverId = song.album?.coverArtId {
+                await downloadCover(coverId: coverId)
+            }
+            
+        } catch {
+            logger.error("❌ Download failed for \(song.title): \(error)")
+        }
     }
     
-    func isPinned(_ songId: String) -> Bool {
-        guard let url = localFileURL(for: songId) else { return false }
-        return FileManager.default.fileExists(atPath: url.path)
+    private func downloadCover(coverId: String) async {
+        guard let url = client.coverArtURL(id: coverId, size: 600) else { return }
+        guard let dest = localCoverURL(for: coverId) else { return }
+        
+        if fileManager.fileExists(atPath: dest.path(percentEncoded: false)) { return }
+        
+        do {
+            let data = try await client.downloadData(from: url)
+            try data.write(to: dest)
+        } catch {
+            logger.warning("Failed to download cover \(coverId)")
+        }
     }
+    
+    // MARK: - AssetProvider Conformance
+    
+    func asset(for songId: String) -> AVAsset? {
+        // 1. Check disk
+        if let localURL = localFileURL(for: songId),
+           fileManager.fileExists(atPath: localURL.path(percentEncoded: false)) {
+            // Use AVURLAsset for iOS 18+ compliance
+            return AVURLAsset(url: localURL)
+        }
+        
+        // 2. Fallback to Stream
+        guard let url = client.streamURL(for: songId) else { return nil }
+        return AVURLAsset(url: url)
+    }
+    
+    // MARK: - Helpers
     
     func localFileURL(for songId: String) -> URL? {
-        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else {
-            return nil
-        }
-        let folder = documents.appendingPathComponent("Downloads", isDirectory: true)
-        
-        if !FileManager.default.fileExists(atPath: folder.path) {
-            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        }
-        return folder.appendingPathComponent("\(songId).mp3")
+        let filename = "\(songId).m4a"
+        return downloadsDirectory.appendingPathComponent(filename)
     }
     
-    func restoreSession(id: String, completion: @escaping () -> Void) {
-        self.backgroundCompletionHandler = completion
-    }
-}
-
-// MARK: - URLSessionDelegate
-extension DownloadManager: URLSessionDownloadDelegate {
-    
-    nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let songId = downloadTask.taskDescription else { return }
-        
-        Task { @MainActor in
-            guard let destination = self.localFileURL(for: songId) else { return }
-            try? FileManager.default.removeItem(at: destination) // overwrite
-            try? FileManager.default.moveItem(at: location, to: destination)
-            self.activeDownloads.removeValue(forKey: songId)
-        }
+    func localCoverURL(for coverId: String) -> URL? {
+        let filename = "cover_\(coverId).jpg"
+        return downloadsDirectory.appendingPathComponent(filename)
     }
     
-    nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        guard let songId = downloadTask.taskDescription else { return }
-        let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-        
-        Task { @MainActor in
-            self.activeDownloads[songId] = progress
-        }
-    }
-    
-    nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        Task { @MainActor in
-            self.backgroundCompletionHandler?()
-            self.backgroundCompletionHandler = nil
-        }
+    func isPinned(songId: String) -> Bool {
+        guard let url = localFileURL(for: songId) else { return false }
+        return fileManager.fileExists(atPath: url.path(percentEncoded: false))
     }
 }

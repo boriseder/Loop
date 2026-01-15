@@ -9,7 +9,6 @@ import SwiftUI
 
 struct MiniPlayerView: View {
     @Environment(AppContainer.self) private var container
-    @State private var currentCoverArtId: String?
     
     var body: some View {
         let audio = container.audio
@@ -28,15 +27,22 @@ struct MiniPlayerView: View {
             .frame(height: 2)
             
             HStack(spacing: 12) {
-                // Cover Art
-                CoverArtView(coverArtId: currentCoverArtId, size: 48)
+                // ✅ Cover Art (Driven by AudioEngine state)
+                CoverArtView(coverArtId: audio.currentCoverId, size: 48)
                     .cornerRadius(6)
-                    .id(currentCoverArtId) // Force redraw if ID changes
+                    // Force animation/reload when song changes
+                    .id(audio.currentSongId)
 
                 VStack(alignment: .leading) {
-                    Text(audio.currentSongId ?? String(localized: "Not Playing"))
+                    // ✅ Title & Artist (Driven by AudioEngine state)
+                    Text(audio.currentTitle)
                         .font(.subheadline)
                         .bold()
+                        .lineLimit(1)
+                    
+                    Text(audio.currentArtist)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 
@@ -61,24 +67,6 @@ struct MiniPlayerView: View {
             }
             .padding(12)
             .background(.thinMaterial)
-        }
-        // ✅ Debug Task
-        .task(id: audio.currentSongId) {
-            guard let songId = audio.currentSongId else {
-                currentCoverArtId = nil
-                return
-            }
-            
-            print("🔍 MiniPlayer: Fetching cover for song \(songId)...")
-            let artId = await container.repo.getCoverArtId(for: songId)
-            
-            if let artId {
-                print("🎨 MiniPlayer: Received Art ID: \(artId)")
-            } else {
-                print("❌ MiniPlayer: Received NIL Art ID")
-            }
-            
-            self.currentCoverArtId = artId
         }
     }
 }

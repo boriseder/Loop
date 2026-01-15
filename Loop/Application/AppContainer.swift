@@ -5,50 +5,43 @@
 //  Created by Architecture Blueprint v6.3
 //
 
-import SwiftUI
+import Foundation
+import SwiftData
 import Observation
 
-@Observable @MainActor
+@Observable
 final class AppContainer {
     
-    // MARK: - Level 0: Pure Utilities
+    // Core Services
     let client: NavidromeClient
-    let database: MusicDatabase
-    let router: Router
-    let networkMonitor: NetworkMonitor
-    
-    // MARK: - Level 1: Data Services
+    let db: MusicDatabase
     let repo: MusicRepository
-    let downloads: DownloadManager
-    let playbackState: PlaybackPersistence
+    let router: Router
     
-    // MARK: - Level 2: Coordinators
+    // Feature Services
+    let downloads: DownloadManager
     let audio: AudioEngine
     
     init() {
-        // 0. Initialize Utilities
+        // 1. Foundation
         self.client = NavidromeClient()
-        self.database = MusicDatabase()
+        self.db = MusicDatabase()
         self.router = Router()
-        self.networkMonitor = NetworkMonitor()
         
-        // 1. Initialize Services
-        self.repo = MusicRepository(db: database, client: client)
+        // 2. Data Layer
+        self.repo = MusicRepository(db: db, client: client)
+        
+        // 3. Downloads (Now constructed correctly)
+        // ✅ FIX: Pass 'client' to the init
         self.downloads = DownloadManager(client: client)
-        self.playbackState = PlaybackPersistence()
         
-        // 2. Initialize Coordinators
-        // The "Smart" provider needs access to Downloads, Network, and Client
-        let provider = SmartAssetProvider(
-            downloads: downloads,
-            networkMonitor: networkMonitor,
-            client: client
-        )
-
-        // ✅ FIX: Inject 'repo' and 'client' dependencies
+        // 4. Persistence
+        let persistence = UserDefaultsPlaybackPersistence()
+        
+        // 5. Audio Engine
         self.audio = AudioEngine(
-            provider: provider,
-            stateStore: playbackState,
+            provider: downloads, // ✅ Now conforms to AssetProvider
+            stateStore: persistence,
             repo: repo,
             client: client
         )

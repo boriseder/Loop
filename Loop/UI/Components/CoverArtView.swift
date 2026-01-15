@@ -42,21 +42,34 @@ struct CoverArtView: View {
             return
         }
         
+        // ✅ 1. CHECK DISK FIRST (Offline Mode)
+        // This was missing from your snippet, but essential for offline support!
+        if let localURL = container.downloads.localCoverURL(for: coverArtId),
+           let data = try? Data(contentsOf: localURL),
+           let uiImage = UIImage(data: data) {
+            self.image = Image(uiImage: uiImage)
+            return
+        }
+        
         let pixelSize = Int(size * scale)
         guard let url = container.client.coverArtURL(id: coverArtId, size: pixelSize) else { return }
         
-        // Avoid re-downloading if we already have the correct image (basic check)
+        // Avoid re-downloading if we already have the correct image
         if isLoading { return }
         
         isLoading = true
         defer { isLoading = false }
         
         do {
-            // ✅ Always use trusted client download
+            // 2. Download from Network
             let data = try await container.client.downloadData(from: url)
             if let uiImage = UIImage(data: data) {
                 self.image = Image(uiImage: uiImage)
             }
+        } catch is CancellationError {
+            // ✅ SILENCE: Task was cancelled by SwiftUI (user scrolled away)
+        } catch let error as URLError where error.code == .cancelled {
+            // ✅ SILENCE: Network request was cancelled
         } catch {
             print("❌ CoverArt Failed: \(error)")
         }

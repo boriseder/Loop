@@ -11,50 +11,57 @@ import OSLog
 
 @Observable @MainActor
 final class AlbumDetailViewModel {
+    
+    // MARK: - State
     var songs: [Song] = []
-    var albumTitle: String = ""
-    var isLoading: Bool = false
+    var album: Album?
+    var isLoading = false
     
-    private let repo: MusicRepository
+    // MARK: - Dependencies
     private let albumId: String
-    private let logger = Logger(subsystem: "com.loopapp", category: "AlbumDetailVM")
+    private let repo: MusicRepository
+    private let downloads: DownloadManager
+    private let logger = Logger(subsystem: "com.loopapp", category: "AlbumDetail")
     
-    init(repo: MusicRepository, albumId: String) {
-        self.repo = repo
+    init(albumId: String, repo: MusicRepository, downloads: DownloadManager) {
         self.albumId = albumId
+        self.repo = repo
+        self.downloads = downloads
     }
     
-    func loadSongs() async {
+    // MARK: - Actions
+    
+    func load() async {
         isLoading = true
         
-        // 1. Try Local Fetch
-        songs = (try? await repo.getSongs(for: albumId)) ?? []
+        // 1. Sync Details (Get Tracks)
+        try? await repo.syncAlbumDetails(albumId: albumId)
         
-        // 2. If empty, Sync from Network
-        if songs.isEmpty {
-            logger.info("⚠️ No songs locally. Syncing details...")
-            do {
-                try await repo.syncAlbumDetails(albumId: albumId)
-                // 3. Fetch again after sync
-                songs = (try? await repo.getSongs(for: albumId)) ?? []
-            } catch {
-                logger.error("❌ Failed to sync album details: \(error)")
+        // 2. Fetch from DB
+        do {
+            self.songs = try await repo.getSongs(for: albumId)
+            
+            // Fetch the Album object itself for the header
+            // (We reuse the existing songs list to find the parent if needed, or fetch separately)
+            if let firstSong = songs.first {
+                self.album = firstSong.album
             }
-        }
-        
-        // Update Title Helper
-        // Update the default title assignment
-        if let first = songs.first, let album = first.album {
-            self.albumTitle = album.title
-        } else {
-            // ✅ Modern Localization
-            self.albumTitle = String(localized: "Unknown Album", comment: "Default title when album metadata is missing")
+        } catch {
+            logger.error("Failed to load album details: \(error)")
         }
         
         isLoading = false
     }
     
-    func getQueue() -> [String] {
-        songs.map { $0.id }
+    // ✅ FIX: Download all songs in the album
+    func downloadAlbum() {
+        guard !songs.isEmpty else { return }
+        
+        Task {
+            for song in songs {
+                // We await each one to add them to the queue
+                await downloads.download(song: song)
+            }
+        }
     }
 }
