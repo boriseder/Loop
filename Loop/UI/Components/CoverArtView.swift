@@ -9,82 +9,51 @@ import SwiftUI
 
 struct CoverArtView: View {
     let coverArtId: String?
-    let size: CGFloat
+    let size: Int
     
+    // ❌ DELETE THIS LINE IF YOU SEE IT:
+    // @EnvironmentObject var container: AppContainer
+    
+    // ✅ USE THIS LINE INSTEAD:
     @Environment(AppContainer.self) private var container
-    @Environment(\.displayScale) private var scale
-    
-    // Internal State
-    @State private var image: Image?
-    @State private var isLoading = false
     
     var body: some View {
-        ZStack {
-            if let image {
-                image
-                    .resizable()
-                    .scaledToFill()
-                    .transition(.opacity.animation(.easeInOut(duration: 0.2)))
-            } else {
-                placeholder
+        if let id = coverArtId,
+           let url = container.client.coverArtURL(id: id, size: size) {
+            
+            // Standard AsyncImage (No external dependencies)
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .empty:
+                    placeholder
+                case .success(let image):
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                case .failure:
+                    placeholder
+                @unknown default:
+                    placeholder
+                }
             }
-        }
-        .frame(width: size, height: size)
-        .clipped()
-        .task(id: coverArtId) { // ✅ Re-fetch if ID changes
-            await loadImage()
-        }
-    }
-    
-    private func loadImage() async {
-        guard let coverArtId else {
-            self.image = nil
-            return
-        }
-        
-        // ✅ 1. CHECK DISK FIRST (Offline Mode)
-        // This was missing from your snippet, but essential for offline support!
-        if let localURL = container.downloads.localCoverURL(for: coverArtId),
-           let data = try? Data(contentsOf: localURL),
-           let uiImage = UIImage(data: data) {
-            self.image = Image(uiImage: uiImage)
-            return
-        }
-        
-        let pixelSize = Int(size * scale)
-        guard let url = container.client.coverArtURL(id: coverArtId, size: pixelSize) else { return }
-        
-        // Avoid re-downloading if we already have the correct image
-        if isLoading { return }
-        
-        isLoading = true
-        defer { isLoading = false }
-        
-        do {
-            // 2. Download from Network
-            let data = try await container.client.downloadData(from: url)
-            if let uiImage = UIImage(data: data) {
-                self.image = Image(uiImage: uiImage)
-            }
-        } catch is CancellationError {
-            // ✅ SILENCE: Task was cancelled by SwiftUI (user scrolled away)
-        } catch let error as URLError where error.code == .cancelled {
-            // ✅ SILENCE: Network request was cancelled
-        } catch {
-            print("❌ CoverArt Failed: \(error)")
+            .frame(width: CGFloat(size), height: CGFloat(size))
+            .background(Color.secondary.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            
+        } else {
+            placeholder
+                .frame(width: CGFloat(size), height: CGFloat(size))
+                .background(Color.secondary.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
     
     private var placeholder: some View {
         ZStack {
-            Rectangle()
-                .fill(Color.gray.opacity(0.1))
-            
+            Color.secondary.opacity(0.1)
             Image(systemName: "music.note")
-                .resizable()
-                .scaledToFit()
-                .padding(size * 0.3)
-                .foregroundStyle(.secondary.opacity(0.5))
+                .font(.system(size: CGFloat(size) * 0.4))
+                .foregroundStyle(.secondary)
         }
     }
 }

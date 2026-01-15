@@ -8,28 +8,26 @@
 import SwiftUI
 import Observation
 
-@Observable @MainActor
+@Observable
 final class Router {
+    
     var path = NavigationPath()
     
-    enum Destination: Hashable {
+    enum Destination: Hashable, Codable {
         case albumDetail(albumId: String)
         case artistDetail(artistId: String)
-        case player // Full screen player
-        case settings
+        case genreDetail(genreName: String) // ✅ Added
     }
     
-    func navigate(to destination: Destination) {
-        path.append(destination)
-    }
-    
-    func navigateBack() {
-        if !path.isEmpty {
-            path.removeLast()
+    @ViewBuilder
+    func view(for destination: Destination) -> some View {
+        switch destination {
+        case .albumDetail(let id):
+            AlbumDetailView(albumId: id)
+        case .artistDetail(let id):
+            ArtistDetailView(artistId: id)
+        case .genreDetail(let name): // ✅ Added
+            GenreDetailView(genreName: name)
         }
-    }
-    
-    func navigateToRoot() {
-        path = NavigationPath()
     }
 }

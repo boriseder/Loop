@@ -16,31 +16,47 @@ final class LibraryViewModel {
     enum LibraryScope: String, CaseIterable, Identifiable {
         case albums = "Albums"
         case artists = "Artists"
+        case genres = "Genres"
         var id: Self { self }
     }
     
     // MARK: - State
     var selectedScope: LibraryScope = .albums
     
-    var albums: [Album] = []
-    var artists: [Artist] = [] // ✅ Added
+    // Raw Data
+    var albums: [Loop.Album] = []
+    var artists: [Loop.Artist] = []
+    var genres: [Loop.Genre] = []
     
     var isLoading = false
     var errorMessage: String?
     var statusMessage: String?
     
-    // Local Filter
     var searchText: String = ""
     
-    // ✅ Computed property to switch data source based on Scope
-    var filteredItems: [any Identifiable] {
+    // MARK: - Safe Typed Filtered Lists (Removes View Casting Issues)
+    
+    var filteredAlbums: [Loop.Album] {
+        if searchText.isEmpty { return albums }
+        return albums.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+    }
+    
+    var filteredArtists: [Loop.Artist] {
+        if searchText.isEmpty { return artists }
+        return artists.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+    
+    var filteredGenres: [Loop.Genre] {
+        if searchText.isEmpty { return genres }
+        return genres.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+    
+    // Helper to check if current view is empty
+    var isCurrentViewEmpty: Bool {
         switch selectedScope {
-        case .albums:
-            guard !searchText.isEmpty else { return albums }
-            return albums.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
-        case .artists:
-            guard !searchText.isEmpty else { return artists }
-            return artists.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+        case .albums: return filteredAlbums.isEmpty
+        case .artists: return filteredArtists.isEmpty
+        case .genres: return filteredGenres.isEmpty
         }
     }
     
@@ -62,16 +78,20 @@ final class LibraryViewModel {
         statusMessage = "Loading library..."
         
         do {
-            // 1. Load Local Cache
-            async let fetchedAlbums = repo.getAlbums(limit: 500) // Increased limit for library view
+            // 1. Fetch Local Data
+            async let fetchedAlbums = repo.getAlbums(limit: 500)
             async let fetchedArtists = repo.getArtists()
+            async let fetchedGenres = repo.getGenres()
             
-            let (newAlbums, newArtists) = try await (fetchedAlbums, fetchedArtists)
+            let (newAlbums, newArtists, newGenres) = try await (fetchedAlbums, fetchedArtists, fetchedGenres)
             
             self.albums = newAlbums
             self.artists = newArtists
+            self.genres = newGenres
             
-            // 2. Trigger Background Sync
+            print("📊 VM Loaded: \(albums.count) albums, \(artists.count) artists, \(genres.count) genres")
+            
+            // 2. Trigger Sync
             performSync()
             
         } catch {
@@ -87,11 +107,14 @@ final class LibraryViewModel {
         Task {
             statusMessage = "Syncing..."
             do {
-                try await repo.syncAlbums()
+                try await repo.syncAlbums() // Syncs everything
                 
-                // Refresh Data
+                // Refresh all data
                 self.albums = try await repo.getAlbums(limit: 500)
                 self.artists = try await repo.getArtists()
+                self.genres = try await repo.getGenres()
+                
+                print("🔄 VM Refreshed: \(genres.count) genres available.")
                 
             } catch {
                 logger.error("Sync failed: \(error)")

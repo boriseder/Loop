@@ -11,7 +11,6 @@ struct LibraryView: View {
     @Environment(AppContainer.self) private var container
     @State private var viewModel: LibraryViewModel?
     
-    // Grid Layout for Albums
     private let columns = [
         GridItem(.adaptive(minimum: 150, maximum: 180), spacing: 20)
     ]
@@ -25,21 +24,14 @@ struct LibraryView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.top, 8)
-                        .transition(.opacity)
                 }
                 
                 // Error State
                 if let error = vm.errorMessage {
-                    ContentUnavailableView {
-                        Label("Library Error", systemImage: "exclamationmark.triangle")
-                    } description: {
-                        Text(error)
-                    } actions: {
-                        Button("Retry") { Task { await vm.loadInitialData() } }
-                    }
+                    ContentUnavailableView("Error", systemImage: "exclamationmark.triangle", description: Text(error))
                 }
                 // Empty State
-                else if vm.filteredItems.isEmpty && !vm.isLoading {
+                else if vm.isCurrentViewEmpty && !vm.isLoading {
                     ContentUnavailableView("No \(vm.selectedScope.rawValue)", systemImage: "music.note.list")
                 }
                 // Content
@@ -50,6 +42,8 @@ struct LibraryView: View {
                             albumGrid(vm: vm)
                         case .artists:
                             artistList(vm: vm)
+                        case .genres:
+                            genreList(vm: vm)
                         }
                     }
                 }
@@ -58,12 +52,8 @@ struct LibraryView: View {
             }
         }
         .navigationTitle("Library")
-        .searchable(text: Binding(
-            get: { viewModel?.searchText ?? "" },
-            set: { viewModel?.searchText = $0 }
-        ), prompt: "Filter...")
+        .searchable(text: Binding(get: { viewModel?.searchText ?? "" }, set: { viewModel?.searchText = $0 }), prompt: "Filter...")
         .toolbar {
-            // Scope Selector
             ToolbarItem(placement: .principal) {
                 if let vm = viewModel {
                     Picker("View", selection: Bindable(vm).selectedScope) {
@@ -72,27 +62,18 @@ struct LibraryView: View {
                         }
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 200)
+                    .frame(width: 250)
                 }
             }
             
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    viewModel?.performSync()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
+                Button { viewModel?.performSync() } label: { Image(systemName: "arrow.clockwise") }
             }
         }
-        .refreshable {
-            viewModel?.performSync()
-        }
+        .refreshable { viewModel?.performSync() }
         .onAppear {
             if viewModel == nil {
-                viewModel = LibraryViewModel(
-                    repo: container.repo,
-                    downloads: container.downloads
-                )
+                viewModel = LibraryViewModel(repo: container.repo, downloads: container.downloads)
                 Task { await viewModel?.loadInitialData() }
             }
         }
@@ -103,8 +84,7 @@ struct LibraryView: View {
     @ViewBuilder
     private func albumGrid(vm: LibraryViewModel) -> some View {
         LazyVGrid(columns: columns, spacing: 24) {
-            // ✅ FIX: Explicitly use id: \.id for safety
-            ForEach(vm.filteredItems as? [Album] ?? [], id: \.id) { album in
+            ForEach(vm.filteredAlbums, id: \.id) { album in
                 NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
                     VStack(alignment: .leading, spacing: 8) {
                         CoverArtView(coverArtId: album.coverArtId, size: 150)
@@ -135,8 +115,7 @@ struct LibraryView: View {
     @ViewBuilder
     private func artistList(vm: LibraryViewModel) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            // ✅ FIX: Explicitly use id: \.id
-            ForEach(vm.filteredItems as? [Artist] ?? [], id: \.id) { artist in
+            ForEach(vm.filteredArtists, id: \.id) { artist in
                 NavigationLink(value: Router.Destination.artistDetail(artistId: artist.id)) {
                     HStack(spacing: 16) {
                         Image(systemName: "music.mic.circle.fill")
@@ -156,6 +135,45 @@ struct LibraryView: View {
                     .padding(.horizontal)
                     .padding(.vertical, 12)
                 }
+                Divider().padding(.leading, 70)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func genreList(vm: LibraryViewModel) -> some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(vm.filteredGenres, id: \.name) { genre in
+                
+                // ✅ Added NavigationLink
+                NavigationLink(value: Router.Destination.genreDetail(genreName: genre.name)) {
+                    HStack(spacing: 16) {
+                        Image(systemName: "guitars.fill")
+                            .font(.system(size: 30))
+                            .foregroundStyle(Color.accentColor.opacity(0.8))
+                            .frame(width: 40)
+                        
+                        VStack(alignment: .leading) {
+                            Text(genre.name)
+                                .font(.body)
+                                .foregroundStyle(.primary)
+                            
+                            Text("\(genre.albumCount) albums • \(genre.songCount) songs")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                
                 Divider().padding(.leading, 70)
             }
         }

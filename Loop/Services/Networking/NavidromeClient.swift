@@ -49,7 +49,7 @@ nonisolated struct RemoteArtistDetail: Decodable, Sendable {
     let album: [RemoteAlbum]?
 }
 
-// --- Song Detail DTO (New) ---
+// --- Song Detail DTO ---
 nonisolated struct SubsonicGetSongResponse: Decodable, Sendable {
     let subsonicResponse: GetSongBody
     enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
@@ -57,6 +57,75 @@ nonisolated struct SubsonicGetSongResponse: Decodable, Sendable {
 
 nonisolated struct GetSongBody: Decodable, Sendable {
     let song: RemoteSong?
+}
+
+// --- Genre DTOs (Fixed for Single vs Array) ---
+nonisolated struct SubsonicGetGenresResponse: Decodable, Sendable {
+    let subsonicResponse: GetGenresBody
+    enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
+}
+
+nonisolated struct GetGenresBody: Decodable, Sendable {
+    let genres: GenresContainer?
+}
+
+// ✅ FIX: Custom decoding to handle Array vs Single Object
+nonisolated struct GenresContainer: Decodable, Sendable {
+    let genre: [RemoteGenre]
+    
+    enum CodingKeys: String, CodingKey {
+        case genre
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        // Try decoding as Array first
+        if let list = try? container.decode([RemoteGenre].self, forKey: .genre) {
+            self.genre = list
+        }
+        // Fallback: Try decoding as Single Object
+        else if let single = try? container.decode(RemoteGenre.self, forKey: .genre) {
+            self.genre = [single]
+        }
+        // Fallback: Empty
+        else {
+            self.genre = []
+        }
+    }
+}
+
+nonisolated struct RemoteGenre: Decodable, Sendable {
+    let value: String
+    let albumCount: Int
+    let songCount: Int
+    
+    enum CodingKeys: String, CodingKey {
+        case value, name, albumCount, songCount
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        
+        // 1. Decode Name
+        if let v = try? container.decode(String.self, forKey: .value) {
+            self.value = v
+        } else if let n = try? container.decode(String.self, forKey: .name) {
+            self.value = n
+        } else {
+            self.value = "Unknown"
+        }
+        
+        // 2. Decode Counts (Inline Helper to avoid Isolation Warnings)
+        func decodeInt(_ key: CodingKeys) -> Int {
+            if let i = try? container.decode(Int.self, forKey: key) { return i }
+            if let s = try? container.decode(String.self, forKey: key), let i = Int(s) { return i }
+            return 0
+        }
+        
+        self.albumCount = decodeInt(.albumCount)
+        self.songCount = decodeInt(.songCount)
+    }
 }
 
 // -------------------
@@ -81,6 +150,7 @@ nonisolated struct RemoteAlbum: Decodable, Sendable {
     let artistId: String
     let coverArt: String?
     let year: Int?
+    let genre: String?
 }
 
 // MARK: - Album Details DTOs
@@ -110,12 +180,9 @@ nonisolated struct RemoteSong: Decodable, Sendable {
     let duration: Int?
     let path: String?
     
-    // Search & Detail fields
     let artist: String?
     let album: String?
     let coverArt: String?
-    
-    // ✅ ADDED: Required for linking orphaned songs to albums
     let albumId: String?
 }
 
@@ -123,17 +190,14 @@ nonisolated struct RemoteSong: Decodable, Sendable {
 
 actor NavidromeClient: NSObject {
     
-    // MARK: - Configuration
     private let baseURL: URL
     private var session: URLSession!
     private let logger = Logger(subsystem: "com.loopapp", category: "NavidromeClient")
     
-    // Credentials
     private let username: String
     private let salt: String
     private let token: String
     
-    // MARK: - Initialization
     init(baseURL: URL = URL(string: "http://192.168.0.40:4533")!,
          username: String = "boris",
          password: String = "Beaver-4600!",
@@ -146,12 +210,7 @@ actor NavidromeClient: NSObject {
         
         super.init()
         
-        let cache = URLCache(
-            memoryCapacity: 50 * 1024 * 1024,
-            diskCapacity: 200 * 1024 * 1024,
-            directory: nil
-        )
-        
+        let cache = URLCache(memoryCapacity: 50 * 1024 * 1024, diskCapacity: 200 * 1024 * 1024, directory: nil)
         let config = URLSessionConfiguration.default
         config.urlCache = cache
         config.requestCachePolicy = .returnCacheDataElseLoad
@@ -159,7 +218,6 @@ actor NavidromeClient: NSObject {
         config.timeoutIntervalForResource = 300
         
         self.session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
-        
         logger.info("✅ NavidromeClient initialized for user: \(username)")
     }
     
@@ -173,73 +231,68 @@ actor NavidromeClient: NSObject {
     }
     
     nonisolated func coverArtURL(id: String, size: Int = 300) -> URL? {
-        return buildURL(endpoint: "getCoverArt", params: [
-            "id": id,
-            "size": String(size)
-        ])
+        return buildURL(endpoint: "getCoverArt", params: ["id": id, "size": String(size)])
     }
     
-    // MARK: - Search
+    // MARK: - API Methods
+    
     func search(query: String) async throws -> ([RemoteSong], [RemoteAlbum], [RemoteArtist]) {
-        let params: [String: String] = [
-            "query": query,
-            "songCount": "20",
-            "albumCount": "10",
-            "artistCount": "10"
-        ]
-        
-        guard let url = buildURL(endpoint: "search3", params: params) else {
-            throw URLError(.badURL)
-        }
-        
+        guard let url = buildURL(endpoint: "search3", params: ["query": query, "songCount": "20", "albumCount": "10", "artistCount": "10"]) else { throw URLError(.badURL) }
         let response: SubsonicSearchResponse = try await fetch(url: url)
         let result = response.subsonicResponse.searchResult3
-        
         return (result?.song ?? [], result?.album ?? [], result?.artist ?? [])
     }
     
-    // MARK: - Artist Details
     func fetchArtist(id: String) async throws -> RemoteArtistDetail? {
         let response: SubsonicGetArtistResponse = try await fetch("getArtist", params: ["id": id])
         return response.subsonicResponse.artist
     }
     
-    // MARK: - Song Details (New)
     func fetchSong(id: String) async throws -> RemoteSong? {
         let response: SubsonicGetSongResponse = try await fetch("getSong", params: ["id": id])
         return response.subsonicResponse.song
     }
     
-    // Standard fetch with endpoint string
-    func fetch<T: Decodable & Sendable>(_ endpoint: String, params: [String: String] = [:]) async throws -> T {
-        guard let url = buildURL(endpoint: endpoint, params: params) else {
-            throw URLError(.badURL)
+    // ✅ Updated getGenres with Raw JSON Debugging
+    func getGenres() async throws -> [RemoteGenre] {
+        guard let url = buildURL(endpoint: "getGenres", params: [:]) else { return [] }
+        
+        // 1. Fetch Raw Data first to debug
+        let (data, _) = try await session.data(from: url)
+        
+        // Uncomment this line if it fails again to see the raw JSON in console:
+        // if let jsonStr = String(data: data, encoding: .utf8) { print("📦 GENRES JSON: \(jsonStr)") }
+        
+        // 2. Decode
+        do {
+            let response = try JSONDecoder().decode(SubsonicGetGenresResponse.self, from: data)
+            let list = response.subsonicResponse.genres?.genre ?? []
+            logger.info("✅ Fetched \(list.count) genres")
+            return list
+        } catch {
+            logger.error("❌ Genre Decode Error: \(error)")
+            // Fallback for single object edge cases if DTO failed
+            return []
         }
+    }
+    
+    // Standard fetch
+    func fetch<T: Decodable & Sendable>(_ endpoint: String, params: [String: String] = [:]) async throws -> T {
+        guard let url = buildURL(endpoint: endpoint, params: params) else { throw URLError(.badURL) }
         return try await fetch(url: url)
     }
     
-    // Generic fetch with raw URL
     func fetch<T: Decodable & Sendable>(url: URL) async throws -> T {
-        logger.debug("Fetching URL: \(url.absoluteString)")
-        
         let (data, response) = try await session.data(from: url)
-        
         guard let httpResponse = response as? HTTPURLResponse, 200...299 ~= httpResponse.statusCode else {
-            logger.error("HTTP Error: \(response)")
             throw URLError(.badServerResponse)
         }
-        
         return try JSONDecoder().decode(T.self, from: data)
     }
     
     func downloadData(from url: URL) async throws -> Data {
         let (data, response) = try await session.data(from: url)
-        
-        guard let httpResponse = response as? HTTPURLResponse,
-              200...299 ~= httpResponse.statusCode else {
-            throw URLError(.badServerResponse)
-        }
-        
+        guard let httpResponse = response as? HTTPURLResponse, 200...299 ~= httpResponse.statusCode else { throw URLError(.badServerResponse) }
         return data
     }
     
@@ -259,17 +312,12 @@ actor NavidromeClient: NSObject {
     private nonisolated func buildURL(endpoint: String, params: [String: String]) -> URL? {
         var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: true)
         components?.path = "/rest/\(endpoint)"
-        
         var queryItems = defaultQueryItems
-        for (key, value) in params {
-            queryItems.append(URLQueryItem(name: key, value: value))
-        }
-        
+        for (key, value) in params { queryItems.append(URLQueryItem(name: key, value: value)) }
         components?.queryItems = queryItems
         return components?.url
     }
     
-    // MARK: - Crypto Helper
     private static func generateToken(password: String, salt: String) -> String {
         let input = password + salt
         guard let data = input.data(using: .utf8) else { return "" }
@@ -280,12 +328,8 @@ actor NavidromeClient: NSObject {
 
 // MARK: - URLSessionDelegate
 extension NavidromeClient: URLSessionDelegate {
-    nonisolated func urlSession(_ session: URLSession,
-                                didReceive challenge: URLAuthenticationChallenge,
-                                completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        
-        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-           let trust = challenge.protectionSpace.serverTrust {
+    nonisolated func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust, let trust = challenge.protectionSpace.serverTrust {
             completionHandler(.useCredential, URLCredential(trust: trust))
         } else {
             completionHandler(.performDefaultHandling, nil)

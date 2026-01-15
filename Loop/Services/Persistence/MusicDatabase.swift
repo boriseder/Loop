@@ -6,30 +6,29 @@
 //
 
 import SwiftData
-import SwiftUI
-import Foundation // Needed for FileManager
+import Foundation
 
-@MainActor
+@Observable
 final class MusicDatabase {
     let container: ModelContainer
     
     init() {
-        let schema = Schema([Song.self, Album.self, Artist.self])
-        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let schema = Schema([
+            Loop.Song.self,
+            Loop.Album.self,
+            Loop.Artist.self,
+            Loop.Genre.self
+        ])
         
-        // ✅ FIX: Ensure the directory exists to prevent CoreData 512 errors
-        let fileManager = FileManager.default
-        if let supportDir = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            if !fileManager.fileExists(atPath: supportDir.path) {
-                try? fileManager.createDirectory(at: supportDir, withIntermediateDirectories: true)
-            }
-        }
-        
+        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+
         do {
-            self.container = try ModelContainer(for: schema, configurations: [config])
+            container = try ModelContainer(for: schema, configurations: [modelConfiguration])
+            // ✅ Disable autosave to ensure we control transactions
+            container.mainContext.autosaveEnabled = false
             print("✅ MusicDatabase: Container ready")
         } catch {
-            fatalError("❌ MusicDatabase Init Failed: \(error)")
+            fatalError("Could not create ModelContainer: \(error)")
         }
     }
 }

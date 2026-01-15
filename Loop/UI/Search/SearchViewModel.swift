@@ -12,7 +12,7 @@ import OSLog
 @Observable @MainActor
 final class SearchViewModel {
     
-    // MARK: - Search Scopes
+    // MARK: - Enums
     enum SearchScope: String, CaseIterable, Identifiable {
         case all = "All"
         case songs = "Songs"
@@ -21,50 +21,35 @@ final class SearchViewModel {
         
         var id: Self { self }
         
-        // Localized display title
         var localizedName: String {
-            switch self {
-            case .all: return String(localized: "All", comment: "Search scope all")
-            case .songs: return String(localized: "Songs", comment: "Search scope songs")
-            case .albums: return String(localized: "Albums", comment: "Search scope albums")
-            case .artists: return String(localized: "Artists", comment: "Search scope artists")
-            }
+            NSLocalizedString(self.rawValue, comment: "Search scope")
         }
     }
     
     // MARK: - State
     var query: String = "" {
-        didSet { scheduleSearch() }
+        didSet {
+            // Debounce logic could go here, for now we rely on the View's .onSubmit or .onChange
+            if query.isEmpty {
+                clearResults()
+            } else {
+                Task { await search() }
+            }
+        }
     }
     
     var selectedScope: SearchScope = .all
-    
-    // Raw Results
-    var songs: [Song] = []
-    var albums: [Album] = []
-    var artists: [Artist] = []
-    
-    var isLoading = false
+    var isLoading: Bool = false
     var errorMessage: String?
     
-    // MARK: - Filtered Outputs
-    // These helpers ensure the View only sees what the Scope allows
-    
-    var displayedSongs: [Song] {
-        return (selectedScope == .all || selectedScope == .songs) ? songs : []
-    }
-    
-    var displayedAlbums: [Album] {
-        return (selectedScope == .all || selectedScope == .albums) ? albums : []
-    }
-    
-    var displayedArtists: [Artist] {
-        return (selectedScope == .all || selectedScope == .artists) ? artists : []
-    }
+    // Results
+    // We use the Database models directly so the View can reuse components
+    var displayedSongs: [Song] = []
+    var displayedAlbums: [Album] = []
+    var displayedArtists: [Artist] = []
     
     // MARK: - Dependencies
     private let repo: MusicRepository
-    private var searchTask: Task<Void, Never>?
     private let logger = Logger(subsystem: "com.loopapp", category: "Search")
     
     init(repo: MusicRepository) {
@@ -72,87 +57,82 @@ final class SearchViewModel {
     }
     
     // MARK: - Actions
-    private func scheduleSearch() {
-        searchTask?.cancel()
-        
-        guard query.count > 2 else {
-            clearResults()
-            return
-        }
-        
-        searchTask = Task {
-            try? await Task.sleep(for: .milliseconds(500))
-            if Task.isCancelled { return }
-            
-            await performSearch()
-        }
-    }
     
-    private func performSearch() async {
+    func search() async {
+        guard !query.isEmpty else { return }
+        
         isLoading = true
         errorMessage = nil
         
         do {
             let (remoteSongs, remoteAlbums, remoteArtists) = try await repo.search(query: query)
             
-            // Map to Domain Models
-            let mappedSongs = remoteSongs.map { mapSong($0) }
-            let mappedAlbums = remoteAlbums.map { mapAlbum($0) }
-            let mappedArtists = remoteArtists.map { Artist(id: $0.id, name: $0.name) }
+            // Map Remote DTOs to Transient Local Models (not saving to DB yet)
+            // We create temporary instances just for display
             
-            withAnimation {
-                self.songs = mappedSongs
-                self.albums = mappedAlbums
-                self.artists = mappedArtists
+            // 1. Map Songs
+            self.displayedSongs = remoteSongs.map { remote in
+                Song(
+                    id: remote.id,
+                    title: remote.title,
+                    trackNumber: remote.track ?? 0,
+                    duration: TimeInterval(remote.duration ?? 0),
+                    path: remote.path ?? "",
+                    artistId: remote.artist ?? "unknown", // Search result might lack ID, using name as fallback if needed
+                    albumId: remote.albumId ?? "unknown"
+                )
             }
+            
+            // 2. Map Albums (✅ FIX: Added coverArtId, year, genre)
+            self.displayedAlbums = remoteAlbums.map { remote in
+                Album(
+                    id: remote.id,
+                    title: remote.name,
+                    artistId: remote.artistId,
+                    coverArtId: remote.coverArt, // Passed correctly
+                    year: remote.year,           // Passed correctly
+                    genre: remote.genre          // Passed correctly
+                )
+            }
+            
+            // 3. Map Artists
+            self.displayedArtists = remoteArtists.map { remote in
+                Artist(
+                    id: remote.id,
+                    name: remote.name
+                )
+            }
+            
+            // Filter based on Scope
+            filterResults()
+            
         } catch {
-            if (error as? URLError)?.code == .cancelled { return }
             logger.error("Search failed: \(error)")
-            errorMessage = String(localized: "Search failed. Please try again.", comment: "Search error")
+            errorMessage = "Search failed. Please try again."
         }
         
         isLoading = false
     }
     
+    private func filterResults() {
+        switch selectedScope {
+        case .all:
+            break // Show everything
+        case .songs:
+            displayedAlbums = []
+            displayedArtists = []
+        case .albums:
+            displayedSongs = []
+            displayedArtists = []
+        case .artists:
+            displayedSongs = []
+            displayedAlbums = []
+        }
+    }
+    
     private func clearResults() {
-        songs = []
-        albums = []
-        artists = []
-        errorMessage = nil
-        isLoading = false
-    }
-    
-    // MARK: - Mappers
-    private func mapSong(_ remote: RemoteSong) -> Song {
-        let song = Song(
-            id: remote.id,
-            title: remote.title,
-            trackNumber: remote.track ?? 0,
-            duration: TimeInterval(remote.duration ?? 0),
-            path: "",
-            artistId: "search-artist",
-            albumId: "search-album"
-        )
-        if let artistName = remote.artist {
-            song.artist = Artist(id: "search-artist-obj", name: artistName)
-        }
-        if let albumName = remote.album {
-            let album = Album(id: "search-album-obj", title: albumName, artistId: "search-artist")
-            album.coverArtId = remote.coverArt
-            song.album = album
-        }
-        return song
-    }
-    
-    private func mapAlbum(_ remote: RemoteAlbum) -> Album {
-        let album = Album(
-            id: remote.id,
-            title: remote.name,
-            artistId: remote.artistId,
-            coverArtId: remote.coverArt,
-            year: remote.year
-        )
-        album.artist = Artist(id: remote.artistId, name: remote.artist)
-        return album
+        displayedSongs = []
+        displayedAlbums = []
+        displayedArtists = []
     }
 }
