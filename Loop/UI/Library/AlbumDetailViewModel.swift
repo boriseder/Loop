@@ -24,12 +24,15 @@ final class AlbumDetailViewModel {
     
     private let albumId: String
     private let repo: MusicRepository
+    private let syncManager: SyncManager // ✅ Added
     private let downloads: DownloadManager
     private let player: AudioEngine
     
-    init(albumId: String, repo: MusicRepository, downloads: DownloadManager, player: AudioEngine) {
+    // ✅ Updated Init
+    init(albumId: String, repo: MusicRepository, syncManager: SyncManager, downloads: DownloadManager, player: AudioEngine) {
         self.albumId = albumId
         self.repo = repo
+        self.syncManager = syncManager
         self.downloads = downloads
         self.player = player
     }
@@ -40,8 +43,11 @@ final class AlbumDetailViewModel {
         updateDownloadState()
         
         isLoading = true
-        await repo.syncAlbumDetails(albumId: albumId)
+        // ✅ Fix: Call syncManager instead of repo
+        try? await syncManager.syncAlbumDetails(albumId: albumId)
         
+        // Reload local data after sync
+        self.album = repo.getLocalAlbum(id: albumId)
         self.songs = repo.getLocalSongs(for: albumId)
         isLoading = false
         updateDownloadState()
@@ -50,7 +56,6 @@ final class AlbumDetailViewModel {
     func toggleDownload() {
         switch downloadState {
         case .downloaded:
-            // Delete logic (optional, for now we just keep it simple)
             for song in songs { downloads.deleteDownload(song: song) }
             updateDownloadState()
             
@@ -62,7 +67,7 @@ final class AlbumDetailViewModel {
             }
             
         case .downloading:
-            break // Already working
+            break
         }
     }
     

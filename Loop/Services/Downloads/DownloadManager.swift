@@ -2,7 +2,7 @@
 //  DownloadManager.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  Fixed: Added missing awaits for actor calls
 //
 
 import Foundation
@@ -86,7 +86,8 @@ final class DownloadManager {
         // 3. Download Audio
         logger.info("⬇️ Downloading song: \(song.title)")
         do {
-            if let streamURL = client.streamURL(for: song.id),
+            // ✅ FIX: Added 'await' for actor call
+            if let streamURL = await client.streamURL(for: song.id),
                let data = try? await client.downloadData(from: streamURL) {
                 try data.write(to: url)
                 logger.info("✅ Saved song: \(song.title)")
@@ -108,7 +109,8 @@ final class DownloadManager {
         logger.info("🖼️ Downloading cover: \(coverId)")
         
         // Attempt download
-        if let remoteURL = client.coverArtURL(id: coverId, size: 600),
+        // ✅ FIX: Added 'await' for actor call
+        if let remoteURL = await client.coverArtURL(id: coverId, size: 600),
            let data = try? await client.downloadData(from: remoteURL) {
             try? data.write(to: url)
             logger.info("✅ Saved cover art")

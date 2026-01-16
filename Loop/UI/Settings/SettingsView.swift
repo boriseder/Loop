@@ -18,12 +18,15 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section("Account") {
-                    LabeledContent("Server", value: CredentialStorage.shared.baseURL ?? "Unknown")
-                    LabeledContent("User", value: CredentialStorage.shared.username ?? "Unknown")
+                    // Note: CredentialStorage removed in refactor, consider using a VM or checking AuthService state
+                    LabeledContent("Status", value: container.authService.isAuthenticated ? "Logged In" : "Not Logged In")
                     
                     Button("Logout", role: .destructive) {
-                        container.logout()
-                        dismiss()
+                        // ✅ FIX: Use authService to logout
+                        Task {
+                            await container.authService.logout()
+                            dismiss()
+                        }
                     }
                 }
                 
@@ -68,7 +71,6 @@ struct SettingsView: View {
             
             var totalSize: Int64 = 0
             
-            // ✅ FIX: Use contentsOfDirectory for safe Swift 6 concurrency
             if let files = try? fileManager.contentsOfDirectory(at: coversDir, includingPropertiesForKeys: [.fileSizeKey]) {
                 for fileURL in files {
                     if let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey]),

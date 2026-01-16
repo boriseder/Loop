@@ -14,7 +14,6 @@ struct LoginView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var isConnecting = false
-    @State private var errorMessage: String?
     
     var body: some View {
         VStack(spacing: 24) {
@@ -57,7 +56,7 @@ struct LoginView: View {
             }
             .padding(.horizontal)
             
-            if let error = errorMessage {
+            if let error = container.authService.authError {
                 Text(error)
                     .foregroundStyle(.red)
                     .font(.caption)
@@ -97,14 +96,7 @@ struct LoginView: View {
             cleanURL = "https://" + cleanURL
         }
         
-        // Validate URL format
-        guard URL(string: cleanURL) != nil else {
-            errorMessage = "Invalid server URL format"
-            return
-        }
-        
         isConnecting = true
-        errorMessage = nil
         
         let credentials = Credentials(
             baseURL: cleanURL,
@@ -112,16 +104,7 @@ struct LoginView: View {
             password: password
         )
         
-        do {
-            try await container.login(credentials: credentials)
-            // Success - UI will automatically switch via isAuthenticated binding
-            
-        } catch let error as NetworkError {
-            errorMessage = error.errorDescription
-            
-        } catch {
-            errorMessage = "Connection failed: \(error.localizedDescription)"
-        }
+        await container.authService.login(credentials: credentials)
         
         isConnecting = false
     }

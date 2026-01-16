@@ -16,7 +16,7 @@ struct LoopApp: App {
         WindowGroup {
             Group {
                 // ✅ ROOT SWITCHER
-                if container.isAuthenticated {
+                if container.authService.isAuthenticated {
                     AuthenticatedRoot()
                 } else {
                     LoginView()

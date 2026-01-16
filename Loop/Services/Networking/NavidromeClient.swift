@@ -2,53 +2,42 @@
 //  NavidromeClient.swift
 //  Loop
 //
-//  Thread-safe networking with proper error handling
+//  Architecture: Thread-safe, cached credentials, retry logic
 //
 
 import Foundation
 import OSLog
+import CryptoKit
 
 actor NavidromeClient {
     
     private let logger = Logger(subsystem: "com.loopapp", category: "Network")
     private let session: URLSession
-    private let maxRetries = 3
     
-    private var cachedCredentials: Credentials?
+    private var currentSession: Credentials?
     
-    init() {
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60
-        config.waitsForConnectivity = true
-        self.session = URLSession(configuration: config)
+    init(session: URLSession = .shared) {
+        self.session = session
     }
     
-    // MARK: - Credential Management
+    // MARK: - Auth Management
     
-    func updateCredentials(_ credentials: Credentials) {
-        self.cachedCredentials = credentials
+    func setSession(_ credentials: Credentials) {
+        self.currentSession = credentials
     }
     
-    private func getCredentials() async throws -> Credentials {
-        if let cached = cachedCredentials {
-            return cached
-        }
-        
-        guard let stored = await KeychainStorage.shared.credentials else {
-            throw NetworkError.notAuthenticated
-        }
-        
-        cachedCredentials = stored
-        return stored
+    func clearSession() {
+        self.currentSession = nil
     }
     
     // MARK: - Generic Fetch
     
     func fetch<T: Decodable>(_ endpoint: String, params: [String: String] = [:]) async throws -> T {
-        let credentials = try await getCredentials()
+        guard let credentials = currentSession else {
+            throw NetworkError.notAuthenticated
+        }
         
-        var queryItems = credentials.tokenParams
+        var queryItems = buildTokenParams(for: credentials)
         params.forEach { queryItems[$0.key] = $0.value }
         
         var urlComponents = URLComponents(string: "\(credentials.baseURL)/rest/\(endpoint)")
@@ -61,7 +50,11 @@ actor NavidromeClient {
         return try await fetchWithRetry(url: url)
     }
     
+    // MARK: - Retry Logic
+    
     private func fetchWithRetry<T: Decodable>(url: URL, attempt: Int = 1) async throws -> T {
+        let maxRetries = 3
+        
         do {
             var request = URLRequest(url: url)
             request.timeoutInterval = 30
@@ -74,16 +67,11 @@ actor NavidromeClient {
             
             switch httpResponse.statusCode {
             case 200:
-                let decoded = try JSONDecoder().decode(T.self, from: data)
-                return decoded
+                return try JSONDecoder().decode(T.self, from: data)
                 
-            case 401:
-                // Clear cached credentials on auth failure
-                cachedCredentials = nil
+            case 401, 403:
+                currentSession = nil
                 throw NetworkError.authenticationFailed
-                
-            case 404:
-                throw NetworkError.notFound
                 
             case 500...599:
                 throw NetworkError.serverError(code: httpResponse.statusCode)
@@ -92,48 +80,54 @@ actor NavidromeClient {
                 throw NetworkError.httpError(code: httpResponse.statusCode)
             }
             
-        } catch let error as NetworkError {
-            throw error
         } catch {
-            // Retry on network errors
-            if attempt < maxRetries {
-                logger.warning("Request failed, retrying (\(attempt)/\(self.maxRetries)): \(error.localizedDescription)")
-                try await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000) // Exponential backoff
+            if attempt < maxRetries, shouldRetry(error) {
+                let delay = UInt64(pow(2.0, Double(attempt))) * 1_000_000_000
+                logger.warning("Request failed, retrying (\(attempt)/\(maxRetries)): \(error.localizedDescription)")
+                try await Task.sleep(nanoseconds: delay)
                 return try await fetchWithRetry(url: url, attempt: attempt + 1)
             }
-            throw NetworkError.networkFailure(underlying: error)
+            throw mapError(error)
         }
+    }
+    
+    private func shouldRetry(_ error: Error) -> Bool {
+        if let urlError = error as? URLError {
+            return [
+                .timedOut,
+                .networkConnectionLost,
+                .notConnectedToInternet
+            ].contains(urlError.code)
+        }
+        return false
+    }
+    
+    private func mapError(_ error: Error) -> NetworkError {
+        if let netError = error as? NetworkError { return netError }
+        return .networkFailure(underlying: error)
     }
     
     // MARK: - Asset URLs
     
-    func coverArtURL(id: String, size: Int = 300) async throws -> URL {
-        let credentials = try await getCredentials()
-        var query = credentials.tokenParams
+    func coverArtURL(id: String, size: Int = 300) -> URL? {
+        guard let credentials = currentSession else { return nil }
+        var query = buildTokenParams(for: credentials)
         query["id"] = id
         query["size"] = String(size)
         
         var comps = URLComponents(string: "\(credentials.baseURL)/rest/getCoverArt")
         comps?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
-        
-        guard let url = comps?.url else {
-            throw NetworkError.invalidURL
-        }
-        return url
+        return comps?.url
     }
     
-    func streamURL(for songId: String) async throws -> URL {
-        let credentials = try await getCredentials()
-        var query = credentials.tokenParams
+    func streamURL(for songId: String) -> URL? {
+        guard let credentials = currentSession else { return nil }
+        var query = buildTokenParams(for: credentials)
         query["id"] = songId
         
         var comps = URLComponents(string: "\(credentials.baseURL)/rest/stream")
         comps?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
-        
-        guard let url = comps?.url else {
-            throw NetworkError.invalidURL
-        }
-        return url
+        return comps?.url
     }
     
     func downloadData(from url: URL) async throws -> Data {
@@ -146,9 +140,30 @@ actor NavidromeClient {
         
         return data
     }
+    
+    // MARK: - Helpers
+    
+    /// Generates Subsonic token parameters safely
+    private func buildTokenParams(for credentials: Credentials) -> [String: String] {
+        let salt = String((0..<6).map { _ in
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".randomElement()!
+        })
+        
+        // ✅ FIX: Inlined MD5 calculation to avoid isolation issues with extensions
+        let input = "\(credentials.password)\(salt)"
+        let digest = Insecure.MD5.hash(data: input.data(using: .utf8) ?? Data())
+        let token = digest.map { String(format: "%02hhx", $0) }.joined()
+        
+        return [
+            "u": credentials.username,
+            "t": token,
+            "s": salt,
+            "v": "1.16.1",
+            "c": "iOSClient",
+            "f": "json"
+        ]
+    }
 }
-
-// MARK: - Error Types
 
 enum NetworkError: LocalizedError {
     case notAuthenticated
@@ -163,24 +178,15 @@ enum NetworkError: LocalizedError {
     
     var errorDescription: String? {
         switch self {
-        case .notAuthenticated:
-            return "Not authenticated. Please log in."
-        case .invalidURL:
-            return "Invalid server URL"
-        case .invalidResponse:
-            return "Invalid response from server"
-        case .authenticationFailed:
-            return "Authentication failed. Check your credentials."
-        case .notFound:
-            return "Resource not found"
-        case .serverError(let code):
-            return "Server error (code: \(code))"
-        case .httpError(let code):
-            return "Request failed (code: \(code))"
-        case .networkFailure(let error):
-            return "Network error: \(error.localizedDescription)"
-        case .downloadFailed:
-            return "Download failed"
+        case .notAuthenticated: return "Not authenticated. Please log in."
+        case .invalidURL: return "Invalid server URL"
+        case .invalidResponse: return "Invalid response from server"
+        case .authenticationFailed: return "Authentication failed. Check your credentials."
+        case .notFound: return "Resource not found"
+        case .serverError(let code): return "Server error (code: \(code))"
+        case .httpError(let code): return "Request failed (code: \(code))"
+        case .networkFailure(let error): return "Network error: \(error.localizedDescription)"
+        case .downloadFailed: return "Download failed"
         }
     }
 }

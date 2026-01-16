@@ -29,8 +29,9 @@ struct PlayerView: View {
                     .padding(.bottom, 30)
                 
                 // Cover Art
-                // ✅ CRASH FIX: Use max(0, ...) to ensure size is never negative
-                let artSize = max(0, min(geometry.size.width - 60, geometry.size.height * 0.45))
+                // ✅ FIX: Safe geometry calculation
+                let minDimension = min(geometry.size.width, geometry.size.height)
+                let artSize = minDimension * 0.8 // 80% of width
                 
                 CoverArtView(coverArtId: audio.currentCoverId, size: Int(artSize * 2))
                     .frame(width: artSize, height: artSize)

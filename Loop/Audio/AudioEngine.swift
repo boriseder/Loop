@@ -2,7 +2,7 @@
 //  AudioEngine.swift
 //  Loop
 //
-//  Fixed memory leaks, async handling, and error handling
+//  Fixed: Strict concurrency for AVPlayerItem and weak capture
 //
 
 import Foundation
@@ -10,6 +10,20 @@ import AVFoundation
 import Observation
 import MediaPlayer
 import UIKit
+
+private final class TimeObserverToken {
+    private let player: AVPlayer
+    private let observer: Any
+    
+    init(player: AVPlayer, observer: Any) {
+        self.player = player
+        self.observer = observer
+    }
+    
+    deinit {
+        player.removeTimeObserver(observer)
+    }
+}
 
 @Observable @MainActor
 final class AudioEngine {
@@ -31,7 +45,9 @@ final class AudioEngine {
     private let coverCache: CoverArtCache
     
     private let player = AVQueuePlayer()
-    private var timeObserver: Any?
+    
+    private var timeObserverToken: TimeObserverToken?
+    
     private var nowPlayingInfo = [String: Any]()
     
     init(provider: AssetProvider, stateStore: PlaybackPersistence, repo: MusicRepository, coverCache: CoverArtCache) {
@@ -47,12 +63,6 @@ final class AudioEngine {
         Task { await restoreState() }
     }
     
-    deinit {
-        if let observer = timeObserver {
-            player.removeTimeObserver(observer)
-        }
-    }
-    
     private func setupAudioSession() {
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
@@ -66,38 +76,46 @@ final class AudioEngine {
         player.pause()
         player.removeAllItems()
         
-        let startIndex = queue.firstIndex(of: currentId) ?? 0
-        let batch = queue[startIndex..<min(startIndex + 3, queue.count)]
-        
-        // Load assets in background to avoid blocking UI
-        await withTaskGroup(of: (String, AVAsset?).self) { group in
-            for songId in batch {
-                group.addTask {
-                    let asset = await self.provider.asset(for: songId)
-                    return (songId, asset)
-                }
-            }
-            
-            for await (songId, asset) in group {
-                if let asset = asset {
-                    player.insert(AVPlayerItem(asset: asset), after: nil)
-                } else {
-                    errorMessage = "Failed to load song: \(songId)"
-                }
-            }
-        }
-        
         self.currentSongId = currentId
         self.currentTitle = "Loading..."
         self.currentArtist = ""
         self.currentCoverId = nil
+        
+        // ✅ FIX: Load only AVAssets in background (I/O), NOT AVPlayerItems (UI/MainActor bound)
+        // Explicitly capturing [weak provider] requires provider to be a class (AnyObject)
+        let loadedAssets = await Task.detached(priority: .userInitiated) { [weak provider] () -> [AVAsset] in
+            guard let provider = provider else { return [] }
+            var assets: [AVAsset] = []
+            
+            // Limit queue buffer to next 3 songs
+            let startIndex = queue.firstIndex(of: currentId) ?? 0
+            let batch = queue[startIndex..<min(startIndex + 3, queue.count)]
+            
+            for songId in batch {
+                if let asset = await provider.asset(for: songId) {
+                    assets.append(asset)
+                }
+            }
+            return assets
+        }.value
+        
+        guard !loadedAssets.isEmpty else {
+            self.errorMessage = "Could not load songs"
+            return
+        }
+        
+        // ✅ FIX: Create AVPlayerItems on the MainActor
+        for asset in loadedAssets {
+            let item = AVPlayerItem(asset: asset)
+            player.insert(item, after: nil)
+        }
         
         let durationValue = await getDuration()
         updateNowPlaying(duration: durationValue, rate: autoPlay ? 1.0 : 0.0)
         
         if autoPlay { play() }
         
-        // Load metadata asynchronously without blocking playback
+        // Load metadata asynchronously
         Task.detached(priority: .userInitiated) {
             await self.loadMetadata(for: currentId)
         }
@@ -142,7 +160,7 @@ final class AudioEngine {
     }
     
     private func loadMetadata(for songId: String) async {
-        guard let song = await repo.song(id: songId) else { return }
+        guard let song = repo.song(id: songId) else { return }
         
         await MainActor.run {
             self.currentTitle = song.title
@@ -158,7 +176,6 @@ final class AudioEngine {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
         }
         
-        // Load cover art
         if let coverId = song.album?.coverArtId {
             if let image = await coverCache.getImage(for: coverId, size: 600) {
                 await MainActor.run {
@@ -206,12 +223,15 @@ final class AudioEngine {
     }
     
     private func setupObservers() {
-        timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(seconds: 1.0, preferredTimescale: 600),
+        let observer = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
             queue: .main
         ) { [weak self] time in
-            self?.updateProgress(time: time)
+            MainActor.assumeIsolated {
+                self?.updateProgress(time: time)
+            }
         }
+        self.timeObserverToken = TimeObserverToken(player: player, observer: observer)
     }
     
     private func updateProgress(time: CMTime) {

@@ -2,144 +2,73 @@
 //  CoverArtCache.swift
 //  Loop
 //
-//  Created by Boris Eder on 16.01.26.
-//
-
-
-//
-//  CoverArtCache.swift
-//  Loop
-//
-//  Manages cover art caching with proper URL caching and disk persistence
+//  Fixed: Correct handling of Actor calls and Optionals
 //
 
 import Foundation
-import UIKit
+import SwiftUI
 import OSLog
 
-actor CoverArtCache {
+@MainActor
+final class CoverArtCache {
     
     private let client: NavidromeClient
     private let fileManager = FileManager.default
-    private let logger = Logger(subsystem: "com.loopapp", category: "Cache")
-    
-    // In-memory cache for frequently accessed covers
-    private var memoryCache: [String: UIImage] = [:]
-    private let maxMemoryCacheSize = 50
-    
-    private lazy var coversDirectory: URL = {
-        let urls = fileManager.urls(for: .cachesDirectory, in: .userDomainMask)
-        let dir = urls[0].appendingPathComponent("Covers", isDirectory: true)
-        try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
+    private let logger = Logger(subsystem: "com.loopapp", category: "CoverCache")
+    private let memoryCache = NSCache<NSString, UIImage>()
     
     init(client: NavidromeClient) {
         self.client = client
+        createCacheDirectory()
     }
     
-    // MARK: - Public Interface
+    private var cacheDirectory: URL {
+        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Covers")
+    }
     
-    func getImage(for coverArtId: String, size: Int) async -> UIImage? {
-        // 1. Check memory cache
-        let cacheKey = "\(coverArtId)-\(size)"
-        if let cached = memoryCache[cacheKey] {
+    private func createCacheDirectory() {
+        try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+    }
+    
+    func getImage(for id: String, size: Int = 300) async -> UIImage? {
+        // 1. Check Memory
+        if let cached = memoryCache.object(forKey: id as NSString) {
             return cached
         }
         
-        // 2. Check disk cache
-        if let diskImage = loadFromDisk(id: coverArtId) {
-            cacheInMemory(image: diskImage, key: cacheKey)
-            return diskImage
-        }
-        
-        // 3. Download from server
-        guard let downloaded = await downloadCover(id: coverArtId, size: size) else {
-            return nil
-        }
-        
-        cacheInMemory(image: downloaded, key: cacheKey)
-        return downloaded
-    }
-    
-    func downloadCover(id: String, size: Int = 600) async -> UIImage? {
-        do {
-            let url = try await client.coverArtURL(id: id, size: size)
-            let data = try await client.downloadData(from: url)
-            
-            guard let image = UIImage(data: data) else {
-                logger.warning("Failed to decode cover image: \(id)")
-                return nil
-            }
-            
-            // Save to disk
-            saveToDisk(data: data, id: id)
-            
+        // 2. Check Disk
+        let fileURL = cacheDirectory.appendingPathComponent("\(id).jpg")
+        if let data = try? Data(contentsOf: fileURL), let image = UIImage(data: data) {
+            memoryCache.setObject(image, forKey: id as NSString)
             return image
+        }
+        
+        // 3. Download
+        return await downloadCover(id: id, size: size)
+    }
+    
+    @discardableResult
+    func downloadCover(id: String, size: Int = 300) async -> UIImage? {
+        let fileURL = cacheDirectory.appendingPathComponent("\(id).jpg")
+        
+        // ✅ FIX: await actor call, handle optional, remove 'try' from non-throwing call
+        guard let remoteURL = await client.coverArtURL(id: id, size: size) else {
+            return nil
+        }
+        
+        do {
+            let data = try await client.downloadData(from: remoteURL)
+            try data.write(to: fileURL)
             
-        } catch {
-            logger.error("Failed to download cover \(id): \(error.localizedDescription)")
-            return nil
-        }
-    }
-    
-    func clearCache() async throws {
-        memoryCache.removeAll()
-        
-        let files = try fileManager.contentsOfDirectory(at: coversDirectory, includingPropertiesForKeys: nil)
-        for file in files {
-            try fileManager.removeItem(at: file)
-        }
-        
-        logger.info("🗑️ Cache cleared")
-    }
-    
-    func getCacheSize() async -> Int64 {
-        var totalSize: Int64 = 0
-        
-        guard let files = try? fileManager.contentsOfDirectory(
-            at: coversDirectory,
-            includingPropertiesForKeys: [.fileSizeKey]
-        ) else {
-            return 0
-        }
-        
-        for fileURL in files {
-            if let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey]),
-               let size = resourceValues.fileSize {
-                totalSize += Int64(size)
+            if let image = UIImage(data: data) {
+                memoryCache.setObject(image, forKey: id as NSString)
+                return image
             }
+        } catch {
+            logger.error("Failed to download cover \(id): \(error)")
         }
         
-        return totalSize
-    }
-    
-    // MARK: - Private Helpers
-    
-    private func localFileURL(for id: String) -> URL {
-        return coversDirectory.appendingPathComponent("\(id).jpg")
-    }
-    
-    private func loadFromDisk(id: String) -> UIImage? {
-        let url = localFileURL(for: id)
-        guard fileManager.fileExists(atPath: url.path),
-              let data = try? Data(contentsOf: url),
-              let image = UIImage(data: data) else {
-            return nil
-        }
-        return image
-    }
-    
-    private func saveToDisk(data: Data, id: String) {
-        let url = localFileURL(for: id)
-        try? data.write(to: url)
-    }
-    
-    private func cacheInMemory(image: UIImage, key: String) {
-        // Simple LRU: if cache is full, remove first item
-        if memoryCache.count >= maxMemoryCacheSize {
-            memoryCache.removeValue(forKey: memoryCache.keys.first!)
-        }
-        memoryCache[key] = image
+        return nil
     }
 }

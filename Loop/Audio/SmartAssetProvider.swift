@@ -2,7 +2,7 @@
 //  SmartAssetProvider.swift
 //  Loop
 //
-//  With proper error handling and logging
+//  Fixed: Removed unnecessary 'try' and handled optional URL
 //
 
 import Foundation
@@ -28,13 +28,13 @@ final class SmartAssetProvider: AssetProvider {
         }
         
         // 2. Fallback to Network Stream
-        do {
-            let streamURL = try await client.streamURL(for: songId)
+        // ✅ FIX: Removed 'try', added 'await', handled optional URL
+        if let streamURL = await client.streamURL(for: songId) {
             logger.info("📡 Streaming: \(songId)")
             return AVURLAsset(url: streamURL)
-        } catch {
-            logger.error("❌ Failed to get stream URL for \(songId): \(error.localizedDescription)")
-            return nil
         }
+        
+        logger.error("❌ Failed to get stream URL for \(songId)")
+        return nil
     }
 }

@@ -2,10 +2,10 @@
 //  GenreDetailViewModel.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  Fixed: Exposed 'genreName' to the View
 //
 
-import SwiftUI
+import Foundation
 import Observation
 
 @Observable @MainActor
@@ -14,8 +14,9 @@ final class GenreDetailViewModel {
     var albums: [Loop.Album] = []
     var isLoading = false
     
-    // ✅ FIX: Removed 'private' so the View can access it
+    // ✅ FIX: Removed 'private' so the View can access it (e.g. for .navigationTitle)
     let genreName: String
+    
     private let repo: MusicRepository
     
     init(genreName: String, repo: MusicRepository) {
@@ -26,9 +27,9 @@ final class GenreDetailViewModel {
     func load() async {
         isLoading = true
         do {
-            self.albums = try await repo.getAlbums(forGenre: genreName)
+            self.albums = try repo.getAlbums(forGenre: genreName)
         } catch {
-            print("Failed to load genre: \(error)")
+            print("Error loading genre: \(error)")
         }
         isLoading = false
     }

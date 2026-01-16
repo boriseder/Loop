@@ -2,15 +2,7 @@
 //  SecurityDelegate.swift
 //  Loop
 //
-//  Created by Boris Eder on 14.01.26.
-//
-
-
-//
-//  SecurityDelegate.swift
-//  Loop
-//
-//  Created by Architecture Blueprint v6.3
+//  Fixed: Certificate validation is now enforced in Release builds.
 //
 
 import Foundation
@@ -21,7 +13,8 @@ final class SecurityDelegate: NSObject, AVAssetResourceLoaderDelegate, Sendable 
     // This method is called when AVPlayer encounters an authentication challenge (like a self-signed cert)
     func resourceLoader(_ resourceLoader: AVAssetResourceLoader, shouldWaitForResponseTo authenticationChallenge: URLAuthenticationChallenge) -> Bool {
         
-        // Check if the challenge is about Server Trust (SSL/TLS)
+        // Only allow self-signed certs in DEBUG mode
+        #if DEBUG
         if authenticationChallenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
            let trust = authenticationChallenge.protectionSpace.serverTrust {
             
@@ -29,7 +22,9 @@ final class SecurityDelegate: NSObject, AVAssetResourceLoaderDelegate, Sendable 
             authenticationChallenge.sender?.use(URLCredential(trust: trust), for: authenticationChallenge)
             return true
         }
+        #endif
         
+        // In Release, we fall through to default handling (which rejects invalid certs)
         return false
     }
 }

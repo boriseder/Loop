@@ -51,7 +51,7 @@ struct AlbumDetailView: View {
                                     .clipShape(Capsule())
                             }
                             
-                            // ✅ VISUAL ONLY DOWNLOAD BUTTON
+                            // Download Button
                             Button {
                                 vm.toggleDownload()
                             } label: {
@@ -73,7 +73,7 @@ struct AlbumDetailView: View {
                                     case .downloaded:
                                         Image(systemName: "checkmark")
                                             .font(.system(size: 20, weight: .bold))
-                                            .foregroundStyle(.green) // ✅ Green for success
+                                            .foregroundStyle(.green)
                                     }
                                 }
                             }
@@ -133,9 +133,11 @@ struct AlbumDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if viewModel == nil {
+                // ✅ FIX: Inject syncManager here
                 viewModel = AlbumDetailViewModel(
                     albumId: albumId,
                     repo: container.repo,
+                    syncManager: container.syncManager,
                     downloads: container.downloads,
                     player: container.audio
                 )
