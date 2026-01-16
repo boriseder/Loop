@@ -22,20 +22,24 @@ final class LibraryViewModel {
     // MARK: - State
     var selectedScope: LibraryScope = .albums
     var showDownloadedOnly: Bool = false
-    
-    // Sync State
     var isSyncing: Bool = false
     
-    // Data
+    // Data Sources
     var albums: [Loop.Album] = []
     var artists: [Loop.Artist] = []
     var genres: [Loop.Genre] = []
     
+    // Search State
+    var searchText: String = "" {
+        didSet {
+            // Debounce could be added here, but for local DB, direct call is usually fine
+            performSearch()
+        }
+    }
+    
     var isLoading = false
     var errorMessage: String?
     var statusMessage: String?
-    
-    var searchText: String = ""
     
     private let repo: MusicRepository
     private let downloads: DownloadManager
@@ -46,39 +50,23 @@ final class LibraryViewModel {
         self.downloads = downloads
     }
     
-    // MARK: - Filter Logic
+    // MARK: - Computed Data
+    // We strictly separate "Browsing Mode" vs "Search Mode"
+    
     var filteredAlbums: [Loop.Album] {
-        var result = albums
         if showDownloadedOnly {
-            result = result.filter { album in album.songs.contains { downloads.isPinned(songId: $0.id) } }
+            return albums.filter { album in album.songs.contains { downloads.isPinned(songId: $0.id) } }
         }
-        if !searchText.isEmpty {
-            result = result.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
-        }
-        return result
+        return albums
     }
     
     var filteredArtists: [Loop.Artist] {
-        var result = artists
-        if showDownloadedOnly {
-            result = result.filter { artist in artist.songs.contains { downloads.isPinned(songId: $0.id) } }
-        }
-        if !searchText.isEmpty {
-            result = result.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
-        }
-        return result
+        // Simple logic: If searching, 'artists' already contains search results.
+        return artists
     }
     
     var filteredGenres: [Loop.Genre] {
-        var result = genres
-        if showDownloadedOnly {
-            let downloadedGenres = Set(albums.filter { album in album.songs.contains { downloads.isPinned(songId: $0.id) } }.compactMap { $0.genre })
-            result = result.filter { downloadedGenres.contains($0.name) }
-        }
-        if !searchText.isEmpty {
-            result = result.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
-        }
-        return result
+        return genres
     }
     
     var isCurrentViewEmpty: Bool {
@@ -90,15 +78,11 @@ final class LibraryViewModel {
     }
 
     // MARK: - Actions
+    
     func loadInitialData() async {
         isLoading = true
         errorMessage = nil
-        
-        // 1. Load what we have locally immediately
         await refreshLocalData()
-        isLoading = false
-        
-        // 2. Trigger Smart Sync (Prioritized)
         performSmartSync()
     }
     
@@ -106,16 +90,16 @@ final class LibraryViewModel {
         Task {
             await repo.syncSmart { [weak self] syncing in
                 self?.isSyncing = syncing
-                // Whenever sync state updates, likely data updated too, so refresh local view
-                Task { await self?.refreshLocalData() }
+                if !syncing { Task { await self?.refreshLocalData() } }
             }
         }
     }
     
     func refreshLocalData() async {
+        guard searchText.isEmpty else { return } // Don't overwrite search results
+        
         do {
-            // We fetch a decent amount to fill the UI.
-            // In a real optimized app, this would be paginated or use @Query in the View.
+            // Default Browse Mode: Fetch latest 5000 items
             let fetchedAlbums = try await repo.getAlbums(limit: 5000)
             let fetchedArtists = try await repo.getArtists()
             let fetchedGenres = try await repo.getGenres()
@@ -123,8 +107,24 @@ final class LibraryViewModel {
             self.albums = fetchedAlbums
             self.artists = fetchedArtists
             self.genres = fetchedGenres
+            self.isLoading = false
         } catch {
             logger.error("Refresh failed: \(error)")
         }
+    }
+    
+    private func performSearch() {
+        guard !searchText.isEmpty else {
+            Task { await refreshLocalData() }
+            return
+        }
+        
+        // SQL Search Mode: Query the entire DB
+        let results = repo.searchLocal(query: searchText)
+        
+        // Update the views with search results
+        self.albums = results.albums
+        self.artists = results.artists
+        // (Optional: You could search genres too if you updated repo.searchLocal to return them)
     }
 }

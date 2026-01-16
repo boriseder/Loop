@@ -11,6 +11,8 @@ import Observation
 @Observable
 final class AppContainer {
     
+    var isAuthenticated: Bool = false
+    
     // Core Dependencies
     let client: NavidromeClient
     let db: MusicDatabase
@@ -22,26 +24,43 @@ final class AppContainer {
     var router = Router()
     
     init() {
-        // 1. Setup Client & DB
+        // Check Auth Status on Launch
+        self.isAuthenticated = CredentialStorage.shared.hasCredentials
+        
         let client = NavidromeClient()
         let db = MusicDatabase()
         
         self.client = client
         self.db = db
         
-        // 2. Setup Repo & Downloads
         self.repo = MusicRepository(db: db, client: client)
         self.downloads = DownloadManager(client: client)
         
-        // 3. Setup Audio Stack
         let assetProvider = SmartAssetProvider(client: client, downloadManager: self.downloads)
         
-        // ✅ FIX: Use 'UserDefaultsPersistence()' (Concrete) instead of 'PlaybackPersistence()' (Protocol)
         self.audio = AudioEngine(
             provider: assetProvider,
             stateStore: UserDefaultsPersistence(),
             repo: self.repo,
             client: client
         )
+    }
+    
+    func login(url: String, user: String, pass: String) {
+        let store = CredentialStorage.shared
+        store.baseURL = url
+        store.username = user
+        store.password = pass
+        
+        self.isAuthenticated = true
+        // Trigger initial sync after login
+        Task { await repo.syncSmart { _ in } }
+    }
+    
+    func logout() {
+        CredentialStorage.shared.clear()
+        self.isAuthenticated = false
+        // Optional: Clear DB here if you want a full wipe
+        // db.clearAll()
     }
 }

@@ -179,7 +179,7 @@ final class MusicRepository {
         
         try? await syncGenres()
         
-        // 3. ✅ NEW: Prefetch Cover Art for Offline Use
+        // 3. Prefetch Cover Art for Offline Use
         logger.info("🎨 Starting Cover Art Prefetch...")
         await prefetchCovers()
         
@@ -214,23 +214,25 @@ final class MusicRepository {
     }
     
     private func prefetchCovers() async {
-        // Fetch all albums that have a coverArtId
         let descriptor = FetchDescriptor<Loop.Album>()
         guard let albums = try? context.fetch(descriptor) else { return }
         
-        // Use a TaskGroup to download in parallel (capped concurrency logic would be better for massive libs)
+        let client = self.client
+        let coversDir = self.coversDirectory
+        
         await withTaskGroup(of: Void.self) { group in
             for album in albums {
                 guard let coverId = album.coverArtId else { continue }
                 
-                // Check if file already exists
-                let url = coversDirectory.appendingPathComponent("\(coverId).jpg")
-                if fileManager.fileExists(atPath: url.path) { continue }
+                let url = coversDir.appendingPathComponent("\(coverId).jpg")
+                if FileManager.default.fileExists(atPath: url.path) { continue }
                 
-                // Start download task (Small size 300 for grid view)
+                // ✅ FIX: Resolve URL synchronously on Main Actor before adding the Task
+                guard let remoteURL = client.coverArtURL(id: coverId, size: 300) else { continue }
+                
                 group.addTask {
-                    if let remoteURL = self.client.coverArtURL(id: coverId, size: 300),
-                       let data = try? await self.client.downloadData(from: remoteURL) {
+                    // Now we just use the resolved URL in the background
+                    if let data = try? await client.downloadData(from: remoteURL) {
                         try? data.write(to: url)
                     }
                 }
@@ -287,5 +289,35 @@ final class MusicRepository {
     
     func ensureSongExists(id: String) async {
          guard (try? await client.fetchSong(id: id)) != nil else { return }
+    }
+    
+    // MARK: - Local Search (Offline-First)
+    
+    func searchLocal(query: String) -> (songs: [Loop.Song], albums: [Loop.Album], artists: [Loop.Artist]) {
+        let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanQuery.isEmpty else { return ([], [], []) }
+        
+        let songPredicate = #Predicate<Loop.Song> {
+            $0.title.localizedStandardContains(cleanQuery)
+        }
+        var songDesc = FetchDescriptor<Loop.Song>(predicate: songPredicate)
+        songDesc.fetchLimit = 20
+        let songs = (try? context.fetch(songDesc)) ?? []
+        
+        let albumPredicate = #Predicate<Loop.Album> {
+            $0.title.localizedStandardContains(cleanQuery)
+        }
+        var albumDesc = FetchDescriptor<Loop.Album>(predicate: albumPredicate)
+        albumDesc.fetchLimit = 10
+        let albums = (try? context.fetch(albumDesc)) ?? []
+        
+        let artistPredicate = #Predicate<Loop.Artist> {
+            $0.name.localizedStandardContains(cleanQuery)
+        }
+        var artistDesc = FetchDescriptor<Loop.Artist>(predicate: artistPredicate)
+        artistDesc.fetchLimit = 5
+        let artists = (try? context.fetch(artistDesc)) ?? []
+        
+        return (songs, albums, artists)
     }
 }

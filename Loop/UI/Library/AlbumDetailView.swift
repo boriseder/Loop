@@ -44,38 +44,40 @@ struct AlbumDetailView: View {
                             } label: {
                                 Label("Play", systemImage: "play.fill")
                                     .font(.headline)
-                                    .padding(.horizontal, 24)
-                                    .padding(.vertical, 12)
+                                    .padding(.horizontal, 32)
+                                    .padding(.vertical, 14)
                                     .background(Color.accentColor)
                                     .foregroundStyle(.white)
                                     .clipShape(Capsule())
                             }
                             
-                            // ✅ DYNAMIC DOWNLOAD BUTTON
+                            // ✅ VISUAL ONLY DOWNLOAD BUTTON
                             Button {
                                 vm.toggleDownload()
                             } label: {
-                                Group {
+                                ZStack {
+                                    Circle()
+                                        .fill(.ultraThinMaterial)
+                                        .frame(width: 50, height: 50)
+                                    
                                     switch vm.downloadState {
                                     case .idle:
-                                        Label("Download", systemImage: "arrow.down.circle")
+                                        Image(systemName: "arrow.down")
+                                            .font(.system(size: 20, weight: .bold))
+                                            .foregroundStyle(.primary)
+                                            
                                     case .downloading:
-                                        HStack {
-                                            ProgressView().controlSize(.small)
-                                            Text("Downloading...")
-                                        }
+                                        ProgressView()
+                                            .tint(.primary)
+                                            
                                     case .downloaded:
-                                        Label("Downloaded", systemImage: "checkmark.circle.fill")
-                                            .foregroundStyle(Color.accentColor)
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 20, weight: .bold))
+                                            .foregroundStyle(.green) // ✅ Green for success
                                     }
                                 }
-                                .font(.headline)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 12)
-                                .background(.ultraThinMaterial)
-                                .clipShape(Capsule())
                             }
-                            .disabled(vm.downloadState == .downloading) // Prevent double taps
+                            .disabled(vm.downloadState == .downloading)
                         }
                     }
                     .padding(.top, 20)

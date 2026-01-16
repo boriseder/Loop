@@ -10,6 +10,7 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(AppContainer.self) private var container
     @State private var viewModel: LibraryViewModel?
+    @State private var showSettings = false
     
     private let columns = [
         GridItem(.adaptive(minimum: 150, maximum: 180), spacing: 20)
@@ -24,7 +25,7 @@ struct LibraryView: View {
         .toolbar {
             toolbarContent
         }
-        // ✅ MINIMALISTIC PROGRESS BAR
+        // Minimal Sync Progress Bar
         .safeAreaInset(edge: .top) {
             if let vm = viewModel, vm.isSyncing {
                 ProgressView()
@@ -34,7 +35,9 @@ struct LibraryView: View {
                     .background(Color.secondary.opacity(0.1))
             }
         }
-        .refreshable { viewModel?.performSmartSync() }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
+        }
         .onAppear {
             if viewModel == nil {
                 viewModel = LibraryViewModel(repo: container.repo, downloads: container.downloads)
@@ -47,11 +50,9 @@ struct LibraryView: View {
     private var contentView: some View {
         if let vm = viewModel {
             VStack(spacing: 0) {
-                // Status Text (Optional)
                 if let status = vm.statusMessage {
                     Text(status).font(.caption).foregroundStyle(.secondary).padding(.top, 8)
                 }
-                
                 stateBasedContent(vm: vm)
             }
         } else {
@@ -81,10 +82,7 @@ struct LibraryView: View {
                 description: Text("Try downloading some \(vm.selectedScope.rawValue.lowercased()) first.")
             )
         } else {
-            ContentUnavailableView(
-                "No \(vm.selectedScope.rawValue)",
-                systemImage: "music.note.list"
-            )
+            ContentUnavailableView("No \(vm.selectedScope.rawValue)", systemImage: "music.note.list")
         }
     }
     
@@ -100,24 +98,50 @@ struct LibraryView: View {
     // MARK: - Toolbar
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            if let vm = viewModel {
-                Button { withAnimation { vm.showDownloadedOnly.toggle() } } label: {
-                    Image(systemName: vm.showDownloadedOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                        .foregroundStyle(vm.showDownloadedOnly ? Color.accentColor : Color.primary)
-                }
-            }
-        }
+        // Center: The Main Picker
         ToolbarItem(placement: .principal) {
             if let vm = viewModel {
                 Picker("View", selection: Bindable(vm).selectedScope) {
                     ForEach(LibraryViewModel.LibraryScope.allCases) { scope in Text(scope.rawValue).tag(scope) }
                 }
-                .pickerStyle(.segmented).frame(width: 250)
+                .pickerStyle(.segmented)
+                .frame(width: 220) // Slightly tighter to ensure fit
             }
         }
+        
+        // Right: Unified Menu to save space
         ToolbarItem(placement: .topBarTrailing) {
-            Button { viewModel?.performSmartSync() } label: { Image(systemName: "arrow.clockwise") }
+            Menu {
+                if let vm = viewModel {
+                    // 1. Filter Section
+                    Button {
+                        withAnimation { vm.showDownloadedOnly.toggle() }
+                    } label: {
+                        Label(
+                            vm.showDownloadedOnly ? "Show All" : "Downloaded Only",
+                            systemImage: vm.showDownloadedOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle"
+                        )
+                    }
+                    
+                    Divider()
+                    
+                    // 2. Action Section
+                    Button {
+                        vm.performSmartSync()
+                    } label: {
+                        Label("Refresh Library", systemImage: "arrow.clockwise")
+                    }
+                    
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.system(size: 18))
+            }
         }
     }
     

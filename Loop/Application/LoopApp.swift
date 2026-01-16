@@ -14,33 +14,41 @@ struct LoopApp: App {
     
     var body: some Scene {
         WindowGroup {
-            @Bindable var router = container.router
-            
-            NavigationStack(path: $router.path) {
-                LibraryView()
-                    .navigationDestination(for: Router.Destination.self) { destination in
-                        destinationView(for: destination)
-                    }
-            }
-            // ✅ FIX: Overlay attached to Stack (inside the Environment scope)
-            .overlay(alignment: .bottom) {
-                if container.audio.currentSongId != nil {
-                    MiniPlayerView()
-                        .padding(.bottom, 20)
-                        .padding(.horizontal, 12)
-                        .onTapGesture {
-                            isPlayerPresented = true
-                        }
-                        .transition(.move(edge: .bottom))
+            Group {
+                // ✅ ROOT SWITCHER
+                if container.isAuthenticated {
+                    AuthenticatedRoot()
+                } else {
+                    LoginView()
                 }
             }
-            // ✅ FIX: Sheet attached to Stack (inside the Environment scope)
-            .sheet(isPresented: $isPlayerPresented) {
-                PlayerView(isPresented: $isPlayerPresented)
-                    .presentationDragIndicator(.visible)
-            }
-            // ✅ FIX: Environment applied LAST so it injects into Stack + Overlay + Sheet
             .environment(container)
+        }
+    }
+    
+    // Separated the Authenticated flow to keep body clean
+    @ViewBuilder
+    private func AuthenticatedRoot() -> some View {
+        @Bindable var router = container.router
+        
+        NavigationStack(path: $router.path) {
+            LibraryView()
+                .navigationDestination(for: Router.Destination.self) { destination in
+                    destinationView(for: destination)
+                }
+        }
+        .overlay(alignment: .bottom) {
+            if container.audio.currentSongId != nil {
+                MiniPlayerView()
+                    .padding(.bottom, 20)
+                    .padding(.horizontal, 12)
+                    .onTapGesture { isPlayerPresented = true }
+                    .transition(.move(edge: .bottom))
+            }
+        }
+        .sheet(isPresented: $isPlayerPresented) {
+            PlayerView(isPresented: $isPlayerPresented)
+                .presentationDragIndicator(.visible)
         }
     }
     
