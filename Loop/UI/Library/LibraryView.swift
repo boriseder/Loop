@@ -18,35 +18,8 @@ struct LibraryView: View {
     var body: some View {
         ScrollView {
             if let vm = viewModel {
-                // Status Bar
-                if let status = vm.statusMessage {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 8)
-                }
-                
-                // Error State
-                if let error = vm.errorMessage {
-                    ContentUnavailableView("Error", systemImage: "exclamationmark.triangle", description: Text(error))
-                }
-                // Empty State
-                else if vm.isCurrentViewEmpty && !vm.isLoading {
-                    ContentUnavailableView("No \(vm.selectedScope.rawValue)", systemImage: "music.note.list")
-                }
-                // Content
-                else {
-                    VStack(spacing: 0) {
-                        switch vm.selectedScope {
-                        case .albums:
-                            albumGrid(vm: vm)
-                        case .artists:
-                            artistList(vm: vm)
-                        case .genres:
-                            genreList(vm: vm)
-                        }
-                    }
-                }
+                // ✅ FIX: Move complex logic to a function to satisfy the compiler
+                mainContent(vm: vm)
             } else {
                 ProgressView().padding(.top, 50)
             }
@@ -54,6 +27,20 @@ struct LibraryView: View {
         .navigationTitle("Library")
         .searchable(text: Binding(get: { viewModel?.searchText ?? "" }, set: { viewModel?.searchText = $0 }), prompt: "Filter...")
         .toolbar {
+            // ✅ RESTORED: Filter Button
+            ToolbarItem(placement: .topBarLeading) {
+                if let vm = viewModel {
+                    Button {
+                        withAnimation {
+                            vm.showDownloadedOnly.toggle()
+                        }
+                    } label: {
+                        Image(systemName: vm.showDownloadedOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                            .foregroundStyle(vm.showDownloadedOnly ? .accent : .primary)
+                    }
+                }
+            }
+
             ToolbarItem(placement: .principal) {
                 if let vm = viewModel {
                     Picker("View", selection: Bindable(vm).selectedScope) {
@@ -76,6 +63,60 @@ struct LibraryView: View {
                 viewModel = LibraryViewModel(repo: container.repo, downloads: container.downloads)
                 Task { await viewModel?.loadInitialData() }
             }
+        }
+    }
+    
+    // MARK: - View Builders (Fixes Compiler "Type-Check" Error)
+    
+    @ViewBuilder
+    private func mainContent(vm: LibraryViewModel) -> some View {
+        VStack(spacing: 0) {
+            // 1. Status Bar
+            if let status = vm.statusMessage {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
+            }
+            
+            // 2. Logic Branching
+            if let error = vm.errorMessage {
+                ContentUnavailableView("Error", systemImage: "exclamationmark.triangle", description: Text(error))
+                    .padding(.top, 40)
+            } else if vm.isCurrentViewEmpty && !vm.isLoading {
+                emptyStateView(vm: vm)
+                    .padding(.top, 40)
+            } else {
+                dataContent(vm: vm)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func emptyStateView(vm: LibraryViewModel) -> some View {
+        if vm.showDownloadedOnly {
+            ContentUnavailableView(
+                "No Downloaded \(vm.selectedScope.rawValue)",
+                systemImage: "arrow.down.circle",
+                description: Text("Try downloading some \(vm.selectedScope.rawValue.lowercased()) first.")
+            )
+        } else {
+            ContentUnavailableView(
+                "No \(vm.selectedScope.rawValue)",
+                systemImage: "music.note.list"
+            )
+        }
+    }
+    
+    @ViewBuilder
+    private func dataContent(vm: LibraryViewModel) -> some View {
+        switch vm.selectedScope {
+        case .albums:
+            albumGrid(vm: vm)
+        case .artists:
+            artistList(vm: vm)
+        case .genres:
+            genreList(vm: vm)
         }
     }
     
@@ -144,8 +185,6 @@ struct LibraryView: View {
     private func genreList(vm: LibraryViewModel) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
             ForEach(vm.filteredGenres, id: \.name) { genre in
-                
-                // ✅ Added NavigationLink
                 NavigationLink(value: Router.Destination.genreDetail(genreName: genre.name)) {
                     HStack(spacing: 16) {
                         Image(systemName: "guitars.fill")
@@ -173,7 +212,6 @@ struct LibraryView: View {
                     .padding(.vertical, 12)
                 }
                 .buttonStyle(.plain)
-                
                 Divider().padding(.leading, 70)
             }
         }

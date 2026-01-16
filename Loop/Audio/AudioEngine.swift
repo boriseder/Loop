@@ -51,7 +51,6 @@ final class AudioEngine {
             print("❌ Audio Session Error: \(error)")
         }
         
-        // ✅ FIX: Call async method from init using Task
         Task {
             await restoreState()
         }
@@ -59,7 +58,6 @@ final class AudioEngine {
     
     // MARK: - Player Actions
     
-    // ✅ FIX: Made async
     func setupPlayer(with currentId: String, queue: [String], autoPlay: Bool = true) async {
         player.pause()
         player.removeAllItems()
@@ -67,7 +65,6 @@ final class AudioEngine {
         let startIndex = queue.firstIndex(of: currentId) ?? 0
         let batch = queue[startIndex..<min(startIndex + 3, queue.count)]
         
-        // ✅ FIX: Now we can await the async asset calls
         for songId in batch {
             if let asset = await provider.asset(for: songId) {
                 player.insert(AVPlayerItem(asset: asset), after: nil)
@@ -100,6 +97,16 @@ final class AudioEngine {
         await loadMetadata(for: currentId)
         
         saveState(queue: queue)
+    }
+    
+    // ✅ ADDED: Seek Method
+    func seek(to seconds: Double) {
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        player.seek(to: time)
+        
+        // Update Now Playing info immediately for snappy UI
+        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = seconds
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
     }
     
     private func getDuration() async -> Double {
@@ -155,7 +162,6 @@ final class AudioEngine {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
         
         if let coverId = song.album?.coverArtId {
-            // ✅ FIX: coverArtURL is nonisolated, no await needed
             let url = client.coverArtURL(id: coverId, size: 600)
             
             if let url = url,
@@ -189,14 +195,12 @@ final class AudioEngine {
         stateStore.save(state)
     }
     
-    // ✅ FIX: Made async
     private func restoreState() async {
         guard let saved: PlaybackState = stateStore.load() else { return }
         
         print("💾 Restoring playback state: \(saved.currentSongId)")
         
         await setupPlayer(with: saved.currentSongId, queue: saved.queue, autoPlay: false)
-        // ✅ FIX: await the async seek operation
         await player.seek(to: CMTime(seconds: saved.elapsed, preferredTimescale: 600))
     }
     

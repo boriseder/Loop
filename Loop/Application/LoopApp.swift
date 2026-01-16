@@ -10,7 +10,6 @@ import SwiftUI
 @main
 struct LoopApp: App {
     @State private var container = AppContainer()
-    @State private var isPlayerPresented = false
     
     var body: some Scene {
         WindowGroup {
@@ -20,7 +19,6 @@ struct LoopApp: App {
     }
 }
 
-// ✅ NEW: Separate content view to ensure environment is established first
 struct ContentView: View {
     @Environment(AppContainer.self) private var container
     @State private var isPlayerPresented = false
@@ -45,9 +43,13 @@ struct ContentView: View {
                     .transition(.move(edge: .bottom))
             }
         }
+        // ✅ RESTORED: Sheet for Full Player
+        .sheet(isPresented: $isPlayerPresented) {
+            PlayerView(isPresented: $isPlayerPresented)
+                .presentationDragIndicator(.visible)
+        }
     }
     
-    // ✅ FIX: Create destination views here where environment is available
     @ViewBuilder
     private func destinationView(for destination: Router.Destination) -> some View {
         switch destination {
