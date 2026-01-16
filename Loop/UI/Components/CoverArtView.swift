@@ -2,7 +2,7 @@
 //  CoverArtView.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  Using the new CoverArtCache system
 //
 
 import SwiftUI
@@ -12,37 +12,16 @@ struct CoverArtView: View {
     let size: Int
     
     @Environment(AppContainer.self) private var container
+    @State private var image: UIImage?
     
     var body: some View {
-        let safeSize = CGFloat(max(0, size))
+        let safeSize = CGFloat(max(50, size)) // Minimum 50 to prevent negative sizes
         
         Group {
-            if let id = coverArtId {
-                // 1. Try Local File (Offline Support)
-                let localURL = container.downloads.localCoverURL(for: id)
-                
-                if let localImage = UIImage(contentsOfFile: localURL.path) {
-                    Image(uiImage: localImage)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                }
-                // 2. Try Remote (Online Fallback)
-                else if let url = container.client.coverArtURL(id: id, size: size) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .empty:
-                            placeholder(size: safeSize)
-                        case .success(let image):
-                            image.resizable().aspectRatio(contentMode: .fill)
-                        case .failure:
-                            placeholder(size: safeSize)
-                        @unknown default:
-                            placeholder(size: safeSize)
-                        }
-                    }
-                } else {
-                    placeholder(size: safeSize)
-                }
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
             } else {
                 placeholder(size: safeSize)
             }
@@ -50,6 +29,15 @@ struct CoverArtView: View {
         .frame(width: safeSize, height: safeSize)
         .background(Color.secondary.opacity(0.1))
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .task(id: coverArtId) {
+            await loadImage()
+        }
+    }
+    
+    private func loadImage() async {
+        guard let id = coverArtId else { return }
+        
+        self.image = await container.coverCache.getImage(for: id, size: size)
     }
     
     private func placeholder(size: CGFloat) -> some View {

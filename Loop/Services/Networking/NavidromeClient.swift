@@ -2,116 +2,185 @@
 //  NavidromeClient.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  Thread-safe networking with proper error handling
 //
 
 import Foundation
 import OSLog
 
-final class NavidromeClient: Sendable {
+actor NavidromeClient {
     
     private let logger = Logger(subsystem: "com.loopapp", category: "Network")
-    private let storage = CredentialStorage.shared
+    private let session: URLSession
+    private let maxRetries = 3
     
-    private var baseURL: String { storage.baseURL ?? "" }
-    private var username: String { storage.username ?? "" }
-    private var password: String { storage.password ?? "" }
+    private var cachedCredentials: Credentials?
     
-    private var tokenParams: [String: String] {
-        let salt = String((0..<6).map { _ in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".randomElement()! })
-        let token = "\(password)\(salt)".md5
-        return [
-            "u": username,
-            "t": token,
-            "s": salt,
-            "v": "1.16.1",
-            "c": "iOSClient",
-            "f": "json"
-        ]
+    init() {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForResource = 60
+        config.waitsForConnectivity = true
+        self.session = URLSession(configuration: config)
+    }
+    
+    // MARK: - Credential Management
+    
+    func updateCredentials(_ credentials: Credentials) {
+        self.cachedCredentials = credentials
+    }
+    
+    private func getCredentials() async throws -> Credentials {
+        if let cached = cachedCredentials {
+            return cached
+        }
+        
+        guard let stored = await KeychainStorage.shared.credentials else {
+            throw NetworkError.notAuthenticated
+        }
+        
+        cachedCredentials = stored
+        return stored
     }
     
     // MARK: - Generic Fetch
+    
     func fetch<T: Decodable>(_ endpoint: String, params: [String: String] = [:]) async throws -> T {
-        guard !baseURL.isEmpty else { throw URLError(.badURL) }
+        let credentials = try await getCredentials()
         
-        var queryItems = tokenParams
+        var queryItems = credentials.tokenParams
         params.forEach { queryItems[$0.key] = $0.value }
         
-        var urlComponents = URLComponents(string: "\(baseURL)/rest/\(endpoint)")
+        var urlComponents = URLComponents(string: "\(credentials.baseURL)/rest/\(endpoint)")
         urlComponents?.queryItems = queryItems.map { URLQueryItem(name: $0.key, value: $0.value) }
         
-        guard let url = urlComponents?.url else { throw URLError(.badURL) }
-        
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 30
-        
-        let (data, response) = try await URLSession.shared.data(for: request)
-        
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw URLError(.badServerResponse)
+        guard let url = urlComponents?.url else {
+            throw NetworkError.invalidURL
         }
         
-        return try JSONDecoder().decode(T.self, from: data)
+        return try await fetchWithRetry(url: url)
+    }
+    
+    private func fetchWithRetry<T: Decodable>(url: URL, attempt: Int = 1) async throws -> T {
+        do {
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 30
+            
+            let (data, response) = try await session.data(for: request)
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw NetworkError.invalidResponse
+            }
+            
+            switch httpResponse.statusCode {
+            case 200:
+                let decoded = try JSONDecoder().decode(T.self, from: data)
+                return decoded
+                
+            case 401:
+                // Clear cached credentials on auth failure
+                cachedCredentials = nil
+                throw NetworkError.authenticationFailed
+                
+            case 404:
+                throw NetworkError.notFound
+                
+            case 500...599:
+                throw NetworkError.serverError(code: httpResponse.statusCode)
+                
+            default:
+                throw NetworkError.httpError(code: httpResponse.statusCode)
+            }
+            
+        } catch let error as NetworkError {
+            throw error
+        } catch {
+            // Retry on network errors
+            if attempt < maxRetries {
+                logger.warning("Request failed, retrying (\(attempt)/\(self.maxRetries)): \(error.localizedDescription)")
+                try await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000) // Exponential backoff
+                return try await fetchWithRetry(url: url, attempt: attempt + 1)
+            }
+            throw NetworkError.networkFailure(underlying: error)
+        }
     }
     
     // MARK: - Asset URLs
-    func coverArtURL(id: String, size: Int = 300) -> URL? {
-        guard !baseURL.isEmpty else { return nil }
-        var query = tokenParams
+    
+    func coverArtURL(id: String, size: Int = 300) async throws -> URL {
+        let credentials = try await getCredentials()
+        var query = credentials.tokenParams
         query["id"] = id
         query["size"] = String(size)
         
-        var comps = URLComponents(string: "\(baseURL)/rest/getCoverArt")
+        var comps = URLComponents(string: "\(credentials.baseURL)/rest/getCoverArt")
         comps?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
-        return comps?.url
+        
+        guard let url = comps?.url else {
+            throw NetworkError.invalidURL
+        }
+        return url
     }
     
-    func streamURL(for songId: String) -> URL? {
-        guard !baseURL.isEmpty else { return nil }
-        var query = tokenParams
+    func streamURL(for songId: String) async throws -> URL {
+        let credentials = try await getCredentials()
+        var query = credentials.tokenParams
         query["id"] = songId
         
-        var comps = URLComponents(string: "\(baseURL)/rest/stream")
+        var comps = URLComponents(string: "\(credentials.baseURL)/rest/stream")
         comps?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
-        return comps?.url
+        
+        guard let url = comps?.url else {
+            throw NetworkError.invalidURL
+        }
+        return url
     }
     
     func downloadData(from url: URL) async throws -> Data {
-        let (data, _) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await session.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              httpResponse.statusCode == 200 else {
+            throw NetworkError.downloadFailed
+        }
+        
         return data
     }
+}
+
+// MARK: - Error Types
+
+enum NetworkError: LocalizedError {
+    case notAuthenticated
+    case invalidURL
+    case invalidResponse
+    case authenticationFailed
+    case notFound
+    case serverError(code: Int)
+    case httpError(code: Int)
+    case networkFailure(underlying: Error)
+    case downloadFailed
     
-    // MARK: - Specific Methods
-    
-    func fetchArtist(id: String) async throws -> RemoteArtist {
-        let resp: SubsonicGetArtistResponse = try await fetch("getArtist", params: ["id": id])
-        guard let artist = resp.subsonicResponse.artist else { throw URLError(.cannotParseResponse) }
-        return artist
-    }
-    
-    func getGenres() async throws -> [RemoteGenre] {
-        let resp: SubsonicGenresResponse = try await fetch("getGenres")
-        return resp.subsonicResponse.genres?.genre ?? []
-    }
-    
-    func fetchSong(id: String) async throws -> RemoteSong? {
-        let resp: SubsonicGetSongResponse = try await fetch("getSong", params: ["id": id])
-        return resp.subsonicResponse.song
-    }
-    
-    // ✅ ADDED: Search Method
-    func search(query: String) async throws -> RemoteSearchResult {
-        let params = [
-            "query": query,
-            "songCount": "20",
-            "albumCount": "10",
-            "artistCount": "5"
-        ]
-        
-        let response: SubsonicSearchResponse = try await fetch("search3", params: params)
-        guard let result = response.subsonicResponse.searchResult3 else {
-            throw URLError(.cannotParseResponse)
+    var errorDescription: String? {
+        switch self {
+        case .notAuthenticated:
+            return "Not authenticated. Please log in."
+        case .invalidURL:
+            return "Invalid server URL"
+        case .invalidResponse:
+            return "Invalid response from server"
+        case .authenticationFailed:
+            return "Authentication failed. Check your credentials."
+        case .notFound:
+            return "Resource not found"
+        case .serverError(let code):
+            return "Server error (code: \(code))"
+        case .httpError(let code):
+            return "Request failed (code: \(code))"
+        case .networkFailure(let error):
+            return "Network error: \(error.localizedDescription)"
+        case .downloadFailed:
+            return "Download failed"
         }
-        return result
     }
 }

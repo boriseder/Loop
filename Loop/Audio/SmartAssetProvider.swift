@@ -2,15 +2,17 @@
 //  SmartAssetProvider.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  With proper error handling and logging
 //
 
 import Foundation
 import AVFoundation
+import OSLog
 
 final class SmartAssetProvider: AssetProvider {
     private let client: NavidromeClient
     private let downloadManager: DownloadManager
+    private let logger = Logger(subsystem: "com.loopapp", category: "AssetProvider")
     
     init(client: NavidromeClient, downloadManager: DownloadManager) {
         self.client = client
@@ -21,20 +23,18 @@ final class SmartAssetProvider: AssetProvider {
         // 1. Check Offline File
         if let localURL = downloadManager.localFileURL(for: songId),
            FileManager.default.fileExists(atPath: localURL.path) {
-            print("🎧 Playing from local file: \(songId)")
+            logger.info("🎧 Playing from local file: \(songId)")
             return AVURLAsset(url: localURL)
         }
         
         // 2. Fallback to Network Stream
-        if let streamURL = client.streamURL(for: songId) {
-            print("📡 Streaming: \(songId)")
+        do {
+            let streamURL = try await client.streamURL(for: songId)
+            logger.info("📡 Streaming: \(songId)")
             return AVURLAsset(url: streamURL)
+        } catch {
+            logger.error("❌ Failed to get stream URL for \(songId): \(error.localizedDescription)")
+            return nil
         }
-        
-        return nil
-    }
-    
-    func load(_ property: String) async throws -> Any? {
-        return nil // Not used directly
     }
 }

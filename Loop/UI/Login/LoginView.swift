@@ -2,15 +2,7 @@
 //  LoginView.swift
 //  Loop
 //
-//  Created by Boris Eder on 16.01.26.
-//
-
-
-//
-//  LoginView.swift
-//  Loop
-//
-//  Created by Architecture Blueprint v6.3
+//  With proper async/await and error handling
 //
 
 import SwiftUI
@@ -44,6 +36,7 @@ struct LoginView: View {
                     .textContentType(.URL)
                     .keyboardType(.URL)
                     .autocapitalization(.none)
+                    .autocorrectionDisabled()
                     .padding()
                     .background(Color.secondary.opacity(0.1))
                     .cornerRadius(10)
@@ -51,6 +44,7 @@ struct LoginView: View {
                 TextField("Username", text: $username)
                     .textContentType(.username)
                     .autocapitalization(.none)
+                    .autocorrectionDisabled()
                     .padding()
                     .background(Color.secondary.opacity(0.1))
                     .cornerRadius(10)
@@ -67,13 +61,16 @@ struct LoginView: View {
                 Text(error)
                     .foregroundStyle(.red)
                     .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
             }
             
             Button {
-                validateAndConnect()
+                Task { await validateAndConnect() }
             } label: {
                 if isConnecting {
                     ProgressView()
+                        .frame(maxWidth: .infinity)
                 } else {
                     Text("Connect")
                         .fontWeight(.bold)
@@ -83,36 +80,49 @@ struct LoginView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .padding(.horizontal)
-            .disabled(isConnecting || serverURL.isEmpty || username.isEmpty)
+            .disabled(isConnecting || serverURL.isEmpty || username.isEmpty || password.isEmpty)
             
             Spacer()
         }
         .padding()
     }
     
-    private func validateAndConnect() {
+    private func validateAndConnect() async {
         // Basic validation
         var cleanURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleanURL.hasSuffix("/") { cleanURL.removeLast() }
-        if !cleanURL.hasPrefix("http") { cleanURL = "https://" + cleanURL }
+        if cleanURL.hasSuffix("/") {
+            cleanURL.removeLast()
+        }
+        if !cleanURL.hasPrefix("http") {
+            cleanURL = "https://" + cleanURL
+        }
+        
+        // Validate URL format
+        guard URL(string: cleanURL) != nil else {
+            errorMessage = "Invalid server URL format"
+            return
+        }
         
         isConnecting = true
         errorMessage = nil
         
-        // Save temporarily to container to test connection
-        container.login(url: cleanURL, user: username, pass: password)
+        let credentials = Credentials(
+            baseURL: cleanURL,
+            username: username.trimmingCharacters(in: .whitespaces),
+            password: password
+        )
         
-        // Test Ping
-        Task {
-            do {
-                let _: SubsonicPingResponse = try await container.client.fetch("ping")
-                // Success - AppContainer state is already Auth=true, UI will switch automatically
-            } catch {
-                container.logout() // Revert
-                errorMessage = "Connection failed. Check your URL and credentials."
-                isConnecting = false
-            }
+        do {
+            try await container.login(credentials: credentials)
+            // Success - UI will automatically switch via isAuthenticated binding
+            
+        } catch let error as NetworkError {
+            errorMessage = error.errorDescription
+            
+        } catch {
+            errorMessage = "Connection failed: \(error.localizedDescription)"
         }
+        
+        isConnecting = false
     }
 }
-

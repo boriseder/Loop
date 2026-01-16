@@ -21,11 +21,12 @@ struct LibraryView: View {
             contentView
         }
         .navigationTitle("Library")
+        // ✅ Add spacing so content isn't hidden behind MiniPlayer
+        .contentMargins(.bottom, 80, for: .scrollContent)
         .searchable(text: Binding(get: { viewModel?.searchText ?? "" }, set: { viewModel?.searchText = $0 }), prompt: "Filter...")
         .toolbar {
             toolbarContent
         }
-        // Minimal Sync Progress Bar
         .safeAreaInset(edge: .top) {
             if let vm = viewModel, vm.isSyncing {
                 ProgressView()
@@ -98,22 +99,21 @@ struct LibraryView: View {
     // MARK: - Toolbar
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        // Center: The Main Picker
+        // Center Picker
         ToolbarItem(placement: .principal) {
             if let vm = viewModel {
                 Picker("View", selection: Bindable(vm).selectedScope) {
                     ForEach(LibraryViewModel.LibraryScope.allCases) { scope in Text(scope.rawValue).tag(scope) }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 220) // Slightly tighter to ensure fit
+                .frame(width: 200)
             }
         }
         
-        // Right: Unified Menu to save space
+        // Right Menu (Consolidated buttons)
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 if let vm = viewModel {
-                    // 1. Filter Section
                     Button {
                         withAnimation { vm.showDownloadedOnly.toggle() }
                     } label: {
@@ -125,7 +125,6 @@ struct LibraryView: View {
                     
                     Divider()
                     
-                    // 2. Action Section
                     Button {
                         vm.performSmartSync()
                     } label: {

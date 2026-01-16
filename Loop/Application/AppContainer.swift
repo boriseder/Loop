@@ -2,7 +2,7 @@
 //  AppContainer.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  Simplified dependency injection - no business logic
 //
 
 import Foundation
@@ -18,49 +18,68 @@ final class AppContainer {
     let db: MusicDatabase
     let repo: MusicRepository
     let downloads: DownloadManager
+    let coverCache: CoverArtCache
+    let syncManager: SyncManager
     let audio: AudioEngine
     
     // Navigation
     var router = Router()
     
     init() {
-        // Check Auth Status on Launch
-        self.isAuthenticated = CredentialStorage.shared.hasCredentials
+        // Check auth status
+        let hasCredentials = Task {
+            await KeychainStorage.shared.credentials != nil
+        }
+        
+        self.isAuthenticated = false // Will be updated after async check
         
         let client = NavidromeClient()
         let db = MusicDatabase()
+        let repo = MusicRepository(db: db)
+        let coverCache = CoverArtCache(client: client)
         
         self.client = client
         self.db = db
-        
-        self.repo = MusicRepository(db: db, client: client)
+        self.repo = repo
+        self.coverCache = coverCache
         self.downloads = DownloadManager(client: client)
+        self.syncManager = SyncManager(repo: repo, client: client, cache: coverCache)
         
         let assetProvider = SmartAssetProvider(client: client, downloadManager: self.downloads)
         
         self.audio = AudioEngine(
             provider: assetProvider,
             stateStore: UserDefaultsPersistence(),
-            repo: self.repo,
-            client: client
+            repo: repo,
+            coverCache: coverCache
         )
+        
+        // Check credentials async
+        Task { @MainActor in
+            self.isAuthenticated = await KeychainStorage.shared.credentials != nil
+        }
     }
     
-    func login(url: String, user: String, pass: String) {
-        let store = CredentialStorage.shared
-        store.baseURL = url
-        store.username = user
-        store.password = pass
+    func login(credentials: Credentials) async throws {
+        // Save to keychain
+        try await KeychainStorage.shared.save(credentials: credentials)
+        
+        // Update client
+        await client.updateCredentials(credentials)
+        
+        // Test connection
+        let _: SubsonicPingResponse = try await client.fetch("ping")
         
         self.isAuthenticated = true
-        // Trigger initial sync after login
-        Task { await repo.syncSmart { _ in } }
+        
+        // Trigger initial sync in background
+        Task {
+            try? await syncManager.performSmartSync()
+        }
     }
     
-    func logout() {
-        CredentialStorage.shared.clear()
+    func logout() async {
+        await KeychainStorage.shared.clear()
         self.isAuthenticated = false
-        // Optional: Clear DB here if you want a full wipe
-        // db.clearAll()
     }
 }
