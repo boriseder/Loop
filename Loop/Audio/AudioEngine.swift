@@ -51,20 +51,25 @@ final class AudioEngine {
             print("❌ Audio Session Error: \(error)")
         }
         
-        restoreState()
+        // ✅ FIX: Call async method from init using Task
+        Task {
+            await restoreState()
+        }
     }
     
     // MARK: - Player Actions
     
-    func setupPlayer(with currentId: String, queue: [String], autoPlay: Bool = true) {
+    // ✅ FIX: Made async
+    func setupPlayer(with currentId: String, queue: [String], autoPlay: Bool = true) async {
         player.pause()
         player.removeAllItems()
         
         let startIndex = queue.firstIndex(of: currentId) ?? 0
         let batch = queue[startIndex..<min(startIndex + 3, queue.count)]
         
+        // ✅ FIX: Now we can await the async asset calls
         for songId in batch {
-            if let asset = provider.asset(for: songId) {
+            if let asset = await provider.asset(for: songId) {
                 player.insert(AVPlayerItem(asset: asset), after: nil)
             }
         }
@@ -76,27 +81,25 @@ final class AudioEngine {
         self.currentArtist = ""
         self.currentCoverId = nil
         
-        Task {
-            let durationValue = await getDuration()
-            
-            self.nowPlayingInfo = [
-                MPMediaItemPropertyTitle: "Loading...",
-                MPMediaItemPropertyArtist: "Unknown Artist",
-                MPMediaItemPropertyAlbumTitle: "",
-                MPMediaItemPropertyPlaybackDuration: durationValue,
-                MPNowPlayingInfoPropertyPlaybackRate: autoPlay ? 1.0 : 0.0,
-                MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0
-            ]
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
-            
-            if autoPlay {
-                play()
-            }
-            
-            await loadMetadata(for: currentId)
-            
-            saveState(queue: queue)
+        let durationValue = await getDuration()
+        
+        self.nowPlayingInfo = [
+            MPMediaItemPropertyTitle: "Loading...",
+            MPMediaItemPropertyArtist: "Unknown Artist",
+            MPMediaItemPropertyAlbumTitle: "",
+            MPMediaItemPropertyPlaybackDuration: durationValue,
+            MPNowPlayingInfoPropertyPlaybackRate: autoPlay ? 1.0 : 0.0,
+            MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0
+        ]
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+        
+        if autoPlay {
+            play()
         }
+        
+        await loadMetadata(for: currentId)
+        
+        saveState(queue: queue)
     }
     
     private func getDuration() async -> Double {
@@ -151,10 +154,12 @@ final class AudioEngine {
         
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
         
-        if let coverId = song.album?.coverArtId,
-           let url = client.coverArtURL(id: coverId, size: 600) {
+        if let coverId = song.album?.coverArtId {
+            // ✅ FIX: coverArtURL is nonisolated, no await needed
+            let url = client.coverArtURL(id: coverId, size: 600)
             
-            if let data = try? await client.downloadData(from: url),
+            if let url = url,
+               let data = try? await client.downloadData(from: url),
                let image = UIImage(data: data) {
                 let art = MPMediaItemArtwork(boundsSize: image.size) { _ in return image }
                 nowPlayingInfo[MPMediaItemPropertyArtwork] = art
@@ -170,32 +175,29 @@ final class AudioEngine {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
     }
     
-    // MARK: - Persistence (Fixed)
+    // MARK: - Persistence
     
     private func saveState(queue: [String]? = nil) {
         guard let currentSongId else { return }
         
-        // ✅ FIX: Create the State Object
         let state = PlaybackState(
             currentSongId: currentSongId,
-            queue: queue ?? [], // Fallback if queue isn't passed
+            queue: queue ?? [],
             elapsed: player.currentTime().seconds
         )
         
-        // ✅ FIX: Pass the single object
         stateStore.save(state)
     }
     
-    private func restoreState() {
-        // ✅ FIX: Load the typed object
+    // ✅ FIX: Made async
+    private func restoreState() async {
         guard let saved: PlaybackState = stateStore.load() else { return }
         
         print("💾 Restoring playback state: \(saved.currentSongId)")
         
-        // ✅ FIX: Use properties of the struct
-        setupPlayer(with: saved.currentSongId, queue: saved.queue, autoPlay: false)
-        let time = CMTime(seconds: saved.elapsed, preferredTimescale: 600)
-        player.seek(to: time)
+        await setupPlayer(with: saved.currentSongId, queue: saved.queue, autoPlay: false)
+        // ✅ FIX: await the async seek operation
+        await player.seek(to: CMTime(seconds: saved.elapsed, preferredTimescale: 600))
     }
     
     // MARK: - Remote Controls & Observers

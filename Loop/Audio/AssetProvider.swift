@@ -1,13 +1,7 @@
-//
-//  AssetProvider.swift
-//  Loop
-//
-//  Created by Architecture Blueprint v6.3
-//
-
+// AssetProvider.swift
 import AVFoundation
 
 protocol AssetProvider {
     /// Returns an AVAsset to play (either a local file or a remote URL)
-    func asset(for songId: String) -> AVAsset?
+    func asset(for songId: String) async -> AVAsset?
 }

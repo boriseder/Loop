@@ -40,19 +40,18 @@ final class DownloadManager: AssetProvider {
     func download(song: Song) async {
         guard !isPinned(songId: song.id) else { return }
         
-        // ✅ FIX: Suppress unused result warning
         _ = await MainActor.run { activeDownloads.insert(song.id) }
         defer { Task { @MainActor in activeDownloads.remove(song.id) } }
         
         logger.info("⬇️ Starting download for: \(song.title)")
         
         do {
-            // 1. Get Stream URL
+            // 1. Get Stream URL (nonisolated, no await needed)
             guard let remoteURL = client.streamURL(for: song.id) else {
                 throw URLError(.badURL)
             }
             
-            // 2. Download Data
+            // 2. Download Data (async call to actor)
             let data = try await client.downloadData(from: remoteURL)
             
             // 3. Save to Disk
@@ -72,6 +71,7 @@ final class DownloadManager: AssetProvider {
     }
     
     private func downloadCover(coverId: String) async {
+        // ✅ FIX: coverArtURL is nonisolated, no await needed
         guard let url = client.coverArtURL(id: coverId, size: 600) else { return }
         guard let dest = localCoverURL(for: coverId) else { return }
         
@@ -87,7 +87,7 @@ final class DownloadManager: AssetProvider {
     
     // MARK: - AssetProvider Conformance
     
-    func asset(for songId: String) -> AVAsset? {
+    func asset(for songId: String) async -> AVAsset? {
         // 1. Check disk
         if let localURL = localFileURL(for: songId),
            fileManager.fileExists(atPath: localURL.path(percentEncoded: false)) {
@@ -96,6 +96,7 @@ final class DownloadManager: AssetProvider {
         }
         
         // 2. Fallback to Stream
+        // ✅ FIX: streamURL is nonisolated, no await needed
         guard let url = client.streamURL(for: songId) else { return nil }
         return AVURLAsset(url: url)
     }

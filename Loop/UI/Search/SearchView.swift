@@ -12,41 +12,29 @@ struct SearchView: View {
     @State private var viewModel: SearchViewModel?
     
     var body: some View {
-        NavigationStack {
-            List {
-                if let vm = viewModel {
-                    searchResults(for: vm)
-                } else {
-                    ProgressView()
-                }
+        // ✅ FIX: Removed NavigationStack - use the parent's navigation context
+        List {
+            if let vm = viewModel {
+                searchResults(for: vm)
+            } else {
+                ProgressView()
             }
-            .listStyle(.plain)
-            .navigationTitle(Text("Search", comment: "Navigation title"))
-            .searchable(
-                text: queryBinding,
-                placement: .automatic,
-                prompt: Text("Songs, Albums, Artists...", comment: "Search placeholder")
-            )
-            .searchScopes(scopeBinding) {
-                ForEach(SearchViewModel.SearchScope.allCases) { scope in
-                    Text(scope.localizedName).tag(scope)
-                }
+        }
+        .listStyle(.plain)
+        .navigationTitle(Text("Search", comment: "Navigation title"))
+        .searchable(
+            text: queryBinding,
+            placement: .automatic,
+            prompt: Text("Songs, Albums, Artists...", comment: "Search placeholder")
+        )
+        .searchScopes(scopeBinding) {
+            ForEach(SearchViewModel.SearchScope.allCases) { scope in
+                Text(scope.localizedName).tag(scope)
             }
-            // ✅ FIX: Define destinations for the Search Tab's stack
-            .navigationDestination(for: Router.Destination.self) { destination in
-                switch destination {
-                case .albumDetail(let id):
-                    AlbumDetailView(albumId: id)
-                case .artistDetail(let id):
-                    ArtistDetailView(artistId: id) // We will create this next
-                default:
-                    EmptyView()
-                }
-            }
-            .onAppear {
-                if viewModel == nil {
-                    viewModel = SearchViewModel(repo: container.repo)
-                }
+        }
+        .onAppear {
+            if viewModel == nil {
+                viewModel = SearchViewModel(repo: container.repo)
             }
         }
     }
@@ -76,7 +64,9 @@ struct SearchView: View {
             Section(header: Text("Songs", comment: "Section header")) {
                 ForEach(vm.displayedSongs, id: \.id) { song in
                     Button {
-                        container.audio.setupPlayer(with: song.id, queue: vm.displayedSongs.map(\.id))
+                        Task {
+                            await container.audio.setupPlayer(with: song.id, queue: vm.displayedSongs.map(\.id))
+                        }
                     } label: {
                         HStack {
                             if let album = song.album {
@@ -96,7 +86,6 @@ struct SearchView: View {
         if !vm.displayedAlbums.isEmpty {
             Section(header: Text("Albums", comment: "Section header")) {
                 ForEach(vm.displayedAlbums, id: \.id) { album in
-                    // ✅ FIX: Use NavigationLink instead of router.navigate
                     NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
                         HStack {
                             CoverArtView(coverArtId: album.coverArtId, size: 40).cornerRadius(4)

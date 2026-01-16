@@ -44,8 +44,11 @@ struct AlbumDetailView: View {
                         // Action Buttons
                         HStack(spacing: 20) {
                             Button {
+                                // ✅ FIX: Wrap in Task to call async method
                                 if let first = vm.songs.first {
-                                    container.audio.setupPlayer(with: first.id, queue: vm.songs.map(\.id))
+                                    Task {
+                                        await container.audio.setupPlayer(with: first.id, queue: vm.songs.map(\.id))
+                                    }
                                 }
                             } label: {
                                 Label("Play", systemImage: "play.fill")
@@ -78,7 +81,10 @@ struct AlbumDetailView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(vm.songs) { song in
                             Button {
-                                container.audio.setupPlayer(with: song.id, queue: vm.songs.map(\.id))
+                                // ✅ FIX: Wrap in Task
+                                Task {
+                                    await container.audio.setupPlayer(with: song.id, queue: vm.songs.map(\.id))
+                                }
                             } label: {
                                 HStack(spacing: 16) {
                                     Text("\(song.trackNumber)")
@@ -134,7 +140,6 @@ struct AlbumDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if viewModel == nil {
-                // ✅ FIX: Passed missing 'downloads' parameter
                 viewModel = AlbumDetailViewModel(
                     albumId: albumId,
                     repo: container.repo,
