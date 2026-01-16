@@ -2,7 +2,7 @@
 //  MiniPlayerView.swift
 //  Loop
 //
-//  FIXED: Uses PlaybackEnvironment and MusicEnvironment
+//  FIXED: Added prev/next buttons, better layout
 //
 
 import SwiftUI
@@ -22,6 +22,11 @@ struct MiniPlayerView: View {
                         .aspectRatio(contentMode: .fill)
                 } else {
                     Color.secondary.opacity(0.2)
+                        .overlay {
+                            Image(systemName: "music.note")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                 }
             }
             .frame(width: 44, height: 44)
@@ -41,21 +46,39 @@ struct MiniPlayerView: View {
                     .lineLimit(1)
             }
             
-            Spacer()
+            Spacer(minLength: 8)
             
-            // Play/Pause Button
-            Button {
-                if playback.isPlaying {
-                    playback.pause()
-                } else {
-                    playback.play()
+            // ✅ NEW: Playback Controls
+            HStack(spacing: 8) {
+                Button {
+                    playback.skipToPrevious()
+                } label: {
+                    Image(systemName: "backward.fill")
+                        .font(.body)
+                        .foregroundStyle(.primary)
                 }
-            } label: {
-                Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.title2)
-                    .foregroundStyle(.primary)
+                
+                Button {
+                    if playback.isPlaying {
+                        playback.pause()
+                    } else {
+                        playback.play()
+                    }
+                } label: {
+                    Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.title3)
+                        .foregroundStyle(.primary)
+                }
+                
+                Button {
+                    playback.skipToNext()
+                } label: {
+                    Image(systemName: "forward.fill")
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                }
             }
-            .padding(.trailing, 8)
+            .padding(.trailing, 4)
         }
         .padding(10)
         .background(.regularMaterial)

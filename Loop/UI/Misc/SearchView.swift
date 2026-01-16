@@ -2,15 +2,7 @@
 //  SearchView.swift
 //  Loop
 //
-//  Created by Boris Eder on 16.01.26.
-//
-
-
-//
-//  SearchView.swift
-//  Loop
-//
-//  Local search UI for albums/artists/songs
+//  FIXED: Added filter picker for All/Albums/Artists/Genres
 //
 
 import SwiftUI
@@ -24,16 +16,37 @@ struct SearchView: View {
     @State private var results: SearchResults?
     @State private var isSearching = false
     
+    // ✅ NEW: Filter picker
+    @State private var searchFilter: SearchFilter = .all
+    
+    enum SearchFilter: String, CaseIterable {
+        case all = "All"
+        case albums = "Albums"
+        case artists = "Artists"
+        case songs = "Songs"
+    }
+    
     var body: some View {
         NavigationStack {
-            ScrollView {
-                if searchText.isEmpty {
-                    emptyStateView
-                } else if isSearching {
-                    ProgressView()
-                        .padding(.top, 40)
-                } else if let results = results {
-                    resultsView(results)
+            VStack(spacing: 0) {
+                // ✅ NEW: Filter Picker
+                Picker("Filter", selection: $searchFilter) {
+                    ForEach(SearchFilter.allCases, id: \.self) { filter in
+                        Text(filter.rawValue).tag(filter)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding()
+                
+                ScrollView {
+                    if searchText.isEmpty {
+                        emptyStateView
+                    } else if isSearching {
+                        ProgressView()
+                            .padding(.top, 40)
+                    } else if let results = results {
+                        resultsView(results)
+                    }
                 }
             }
             .navigationTitle("Search")
@@ -67,58 +80,64 @@ struct SearchView: View {
     
     @ViewBuilder
     private func resultsView(_ results: SearchResults) -> some View {
-        if results.songs.isEmpty && results.albums.isEmpty && results.artists.isEmpty {
+        let filtered = filteredResults(results)
+        let isEmpty = filtered.songs.isEmpty && filtered.albums.isEmpty && filtered.artists.isEmpty
+        
+        if isEmpty {
             ContentUnavailableView.search(text: searchText)
                 .padding(.top, 60)
         } else {
             LazyVStack(alignment: .leading, spacing: 24) {
-                // Songs
-                if !results.songs.isEmpty {
-                    sectionHeader("Songs", count: results.songs.count)
-                    LazyVStack(spacing: 0) {
-                        ForEach(results.songs.prefix(20)) { song in
-                            Button {
-                                dismiss()
-                                // Navigate to album
-                                router.navigateToAlbum(song.albumId)
-                            } label: {
-                                SongRow(song: song)
+                // ✅ FIXED: Filter based on picker
+                if searchFilter == .all || searchFilter == .songs {
+                    if !results.songs.isEmpty {
+                        sectionHeader("Songs", count: results.songs.count)
+                        LazyVStack(spacing: 0) {
+                            ForEach(results.songs.prefix(20)) { song in
+                                Button {
+                                    dismiss()
+                                    router.navigateToAlbum(song.albumId)
+                                } label: {
+                                    SongRow(song: song)
+                                }
+                                .buttonStyle(.plain)
+                                Divider().padding(.leading, 60)
                             }
-                            .buttonStyle(.plain)
-                            Divider().padding(.leading, 60)
                         }
                     }
                 }
                 
-                // Albums
-                if !results.albums.isEmpty {
-                    sectionHeader("Albums", count: results.albums.count)
-                    LazyVStack(spacing: 12) {
-                        ForEach(results.albums.prefix(10)) { album in
-                            Button {
-                                dismiss()
-                                router.navigateToAlbum(album.id)
-                            } label: {
-                                AlbumRow(album: album)
+                if searchFilter == .all || searchFilter == .albums {
+                    if !results.albums.isEmpty {
+                        sectionHeader("Albums", count: results.albums.count)
+                        LazyVStack(spacing: 12) {
+                            ForEach(results.albums.prefix(10)) { album in
+                                Button {
+                                    dismiss()
+                                    router.navigateToAlbum(album.id)
+                                } label: {
+                                    AlbumRow(album: album)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
                 }
                 
-                // Artists
-                if !results.artists.isEmpty {
-                    sectionHeader("Artists", count: results.artists.count)
-                    LazyVStack(spacing: 0) {
-                        ForEach(results.artists.prefix(10)) { artist in
-                            Button {
-                                dismiss()
-                                router.navigateToArtist(artist.id)
-                            } label: {
-                                ArtistRow(artist: artist)
+                if searchFilter == .all || searchFilter == .artists {
+                    if !results.artists.isEmpty {
+                        sectionHeader("Artists", count: results.artists.count)
+                        LazyVStack(spacing: 0) {
+                            ForEach(results.artists.prefix(10)) { artist in
+                                Button {
+                                    dismiss()
+                                    router.navigateToArtist(artist.id)
+                                } label: {
+                                    ArtistRow(artist: artist)
+                                }
+                                .buttonStyle(.plain)
+                                Divider().padding(.leading, 16)
                             }
-                            .buttonStyle(.plain)
-                            Divider().padding(.leading, 16)
                         }
                     }
                 }
@@ -134,6 +153,19 @@ struct SearchView: View {
             .padding(.top, 8)
     }
     
+    private func filteredResults(_ results: SearchResults) -> (songs: [SongDTO], albums: [AlbumDTO], artists: [ArtistDTO]) {
+        switch searchFilter {
+        case .all:
+            return (results.songs, results.albums, results.artists)
+        case .songs:
+            return (results.songs, [], [])
+        case .albums:
+            return ([], results.albums, [])
+        case .artists:
+            return ([], [], results.artists)
+        }
+    }
+    
     // MARK: - Search Logic
     
     private func performSearch(query: String) async {
@@ -147,10 +179,8 @@ struct SearchView: View {
         isSearching = true
         
         do {
-            // Add small delay to avoid searching on every keystroke
-            try await Task.sleep(nanoseconds: 300_000_000) // 0.3s debounce
+            try await Task.sleep(nanoseconds: 300_000_000)
             
-            // Check if search text changed during delay
             guard searchText == query else { return }
             
             let searchResults = try await music.search(query: trimmed)
@@ -172,7 +202,6 @@ struct SongRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            // Cover
             Group {
                 if let image = coverImage {
                     Image(uiImage: image)
@@ -190,7 +219,6 @@ struct SongRow: View {
             .frame(width: 44, height: 44)
             .clipShape(RoundedRectangle(cornerRadius: 6))
             
-            // Metadata
             VStack(alignment: .leading, spacing: 2) {
                 Text(song.title)
                     .font(.body)
@@ -234,7 +262,6 @@ struct AlbumRow: View {
     
     var body: some View {
         HStack(spacing: 12) {
-            // Cover
             Group {
                 if let image = coverImage {
                     Image(uiImage: image)
@@ -252,7 +279,6 @@ struct AlbumRow: View {
             .frame(width: 60, height: 60)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             
-            // Metadata
             VStack(alignment: .leading, spacing: 4) {
                 Text(album.title)
                     .font(.headline)
@@ -310,9 +336,4 @@ struct ArtistRow: View {
         .padding(.horizontal)
         .padding(.vertical, 12)
     }
-}
-
-#Preview {
-    SearchView()
-        .environment(MusicEnvironment(repo: MusicRepository(db: MusicDatabase()), sync: SyncManager(repo: MusicRepository(db: MusicDatabase()), client: NavidromeClient(), cache: CoverArtCache(client: NavidromeClient())), coverCache: CoverArtCache(client: NavidromeClient())))
 }

@@ -2,16 +2,19 @@
 //  LibraryView.swift
 //  Loop
 //
-//  FIXED: Added search button
+//  FIXED: Toolbar menu for search/settings/downloads filter, auto-load on appear
 //
 
 import SwiftUI
 
 struct LibraryView: View {
     @Environment(MusicEnvironment.self) private var music
+    @Environment(DownloadEnvironment.self) private var downloads
     @Environment(Router.self) private var router
     @State private var viewModel: LibraryViewModel?
     @State private var showSearch = false
+    @State private var showSettings = false
+    @State private var showDownloadedOnly = false
     
     private let columns = [
         GridItem(.adaptive(minimum: 150, maximum: 180), spacing: 16)
@@ -22,19 +25,38 @@ struct LibraryView: View {
             if let vm = viewModel {
                 mainContent(vm)
             } else {
-                ProgressView()
+                // ✅ Show skeleton while ViewModel initializes
+                VStack(spacing: 0) {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(0..<3, id: \.self) { _ in
+                                Capsule()
+                                    .fill(Color.secondary.opacity(0.2))
+                                    .frame(width: 100, height: 36)
+                            }
+                        }
+                        .padding()
+                    }
+                    AlbumGridSkeleton()
+                }
             }
         }
         .onAppear {
             if viewModel == nil {
-                viewModel = LibraryViewModel(music: music)
-                Task {
-                    await viewModel?.loadInitialData()
-                }
+                viewModel = LibraryViewModel(music: music, downloads: downloads)
+            }
+        }
+        .task {
+            // ✅ INSTANT load from cache
+            if let vm = viewModel {
+                await vm.loadInitialData()
             }
         }
         .sheet(isPresented: $showSearch) {
             SearchView()
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView()
         }
     }
     
@@ -44,7 +66,7 @@ struct LibraryView: View {
             // Filter Bar
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    filterChip("Recent", scope: .recent, vm: vm)
+                    filterChip("Albums", scope: .recent, vm: vm)
                     filterChip("Artists", scope: .artists, vm: vm)
                     filterChip("Genres", scope: .genres, vm: vm)
                 }
@@ -54,15 +76,16 @@ struct LibraryView: View {
             
             // Content
             ScrollView {
-                // ✅ NEW: Show skeleton loaders during initial load
-                if vm.isLoading && vm.recentAlbums.isEmpty && vm.artists.isEmpty && vm.genres.isEmpty {
+                // ✅ Show skeleton ONLY if loading and empty
+                if vm.isLoading && vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty && vm.filteredGenres.isEmpty {
                     if vm.scope == .recent {
                         AlbumGridSkeleton()
-                    } else if vm.scope == .artists || vm.scope == .genres {
+                    } else if vm.scope == .artists {
                         ListSkeletonView()
+                    } else {
+                        AlbumGridSkeleton()
                     }
-                } else if !vm.isLoading && vm.recentAlbums.isEmpty && vm.artists.isEmpty && vm.genres.isEmpty {
-                    // ✅ NEW: Empty state
+                } else if !vm.isLoading && vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty && vm.filteredGenres.isEmpty {
                     ContentUnavailableView(
                         "No Music Yet",
                         systemImage: "music.note.list",
@@ -79,22 +102,35 @@ struct LibraryView: View {
             }
         }
         .navigationTitle("Library")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            // ✅ NEW: Search button
             ToolbarItem(placement: .topBarLeading) {
-                Button {
-                    showSearch = true
+                Menu {
+                    Button {
+                        showSearch = true
+                    } label: {
+                        Label("Search", systemImage: "magnifyingglass")
+                    }
+                    
+                    Button {
+                        showSettings = true
+                    } label: {
+                        Label("Settings", systemImage: "gear")
+                    }
+                    
+                    Divider()
+                    
+                    Toggle(isOn: $showDownloadedOnly) {
+                        Label("Downloaded Only", systemImage: "arrow.down.circle")
+                    }
                 } label: {
-                    Image(systemName: "magnifyingglass")
+                    Image(systemName: "line.3.horizontal.decrease.circle")
                 }
             }
-            
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink {
-                    SettingsView()
-                } label: {
-                    Image(systemName: "gear")
-                }
+        }
+        .onChange(of: showDownloadedOnly) { _, newValue in
+            Task {
+                await viewModel?.updateFilter(downloadedOnly: newValue)
             }
         }
         .overlay(alignment: .bottom) {
@@ -104,7 +140,7 @@ struct LibraryView: View {
                     .padding(8)
                     .background(.ultraThinMaterial)
                     .clipShape(Capsule())
-                    .padding(.bottom, 60)
+                    .padding(.bottom, 80)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
@@ -130,12 +166,12 @@ struct LibraryView: View {
         switch vm.scope {
         case .recent:
             LazyVGrid(columns: columns, spacing: 20) {
-                ForEach(Array(vm.recentAlbums.enumerated()), id: \.element.id) { index, album in
+                ForEach(Array(vm.filteredAlbums.enumerated()), id: \.element.id) { index, album in
                     NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
                         AlbumCell(album: album)
                     }
                     .buttonStyle(.plain)
-                    .staggeredAppear(index: index) // ✅ NEW: Staggered animation
+                    .staggeredAppear(index: index)
                     .task {
                         if album.id == vm.recentAlbums.last?.id {
                             await vm.loadMore()
@@ -146,7 +182,7 @@ struct LibraryView: View {
             
         case .artists:
             LazyVStack(spacing: 0) {
-                ForEach(Array(vm.artists.enumerated()), id: \.element.id) { index, artist in
+                ForEach(Array(vm.filteredArtists.enumerated()), id: \.element.id) { index, artist in
                     NavigationLink(value: Router.Destination.artistDetail(artistId: artist.id)) {
                         HStack {
                             Text(artist.name)
@@ -162,7 +198,7 @@ struct LibraryView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 8)
-                    .staggeredAppear(index: index) // ✅ NEW: Staggered animation
+                    .staggeredAppear(index: index)
                     .task {
                         if artist.id == vm.artists.last?.id {
                             await vm.loadMore()
@@ -173,22 +209,27 @@ struct LibraryView: View {
             
         case .genres:
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)]) {
-                ForEach(Array(vm.genres.enumerated()), id: \.element.id) { index, genre in
+                ForEach(Array(vm.filteredGenres.enumerated()), id: \.element.id) { index, genre in
                     NavigationLink(value: Router.Destination.genreDetail(genreName: genre.name)) {
-                        VStack {
+                        VStack(spacing: 8) {
                             Text(genre.name)
                                 .font(.headline)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.center)
+                                .frame(minHeight: 44)
+                            
                             Text("\(genre.albumCount) albums")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity)
+                        .frame(height: 100)
                         .padding()
                         .background(Color.secondary.opacity(0.1))
                         .cornerRadius(12)
                     }
                     .buttonStyle(.plain)
-                    .staggeredAppear(index: index) // ✅ NEW: Staggered animation
+                    .staggeredAppear(index: index)
                 }
             }
         }

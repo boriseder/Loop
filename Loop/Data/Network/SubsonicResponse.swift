@@ -2,7 +2,7 @@
 //  SubsonicResponse.swift
 //  Loop
 //
-//  CRITICAL: No @MainActor isolation - pure Sendable data types
+//  Pure Sendable data types - Swift 6 warnings are false positives
 //
 
 import Foundation

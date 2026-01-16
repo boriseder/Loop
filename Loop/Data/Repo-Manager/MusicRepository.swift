@@ -2,7 +2,7 @@
 //  MusicRepository.swift
 //  Loop
 //
-//  FIXED: Removed MainActor, proper background context usage, cancellation support
+//  CRITICAL FIX: Added in-memory cache for INSTANT access
 //
 
 import Foundation
@@ -14,41 +14,101 @@ final class MusicRepository: Sendable {
     private let modelContainer: ModelContainer
     private let logger = Logger(subsystem: "com.loopapp", category: "Repo")
     
-    // Background context for async operations
-    private let backgroundContext: ModelContext
+    // ✅ CRITICAL: In-memory cache for INSTANT access
+    private actor Cache {
+        var albums: [AlbumDTO] = []
+        var artists: [ArtistDTO] = []
+        var genres: [GenreDTO] = []
+        var isLoaded = false
+        
+        func setAlbums(_ albums: [AlbumDTO]) {
+            self.albums = albums
+            self.isLoaded = true
+        }
+        
+        func setArtists(_ artists: [ArtistDTO]) {
+            self.artists = artists
+        }
+        
+        func setGenres(_ genres: [GenreDTO]) {
+            self.genres = genres
+        }
+    }
+    
+    private let cache = Cache()
     
     init(db: MusicDatabase) {
         self.modelContainer = db.container
-        self.backgroundContext = ModelContext(db.container)
-        backgroundContext.autosaveEnabled = false
+        
+        // ✅ CRITICAL: Load ALL data into memory on init
+        Task {
+            await preloadCache()
+        }
     }
     
-    // MARK: - Reads (All nonisolated, return value types)
-    
-    nonisolated func song(id: String) async throws -> SongDTO? {
-        try await withCancellationCheck {
+    // ✅ CRITICAL: Load everything into RAM immediately
+    private func preloadCache() async {
+        do {
             let context = ModelContext(modelContainer)
-            let predicate = #Predicate<Loop.Song> { $0.id == id }
-            var descriptor = FetchDescriptor<Loop.Song>(predicate: predicate)
-            descriptor.fetchLimit = 1
             
-            guard let song = try context.fetch(descriptor).first else { return nil }
-            return SongDTO(from: song)
+            // Load ALL albums
+            let albumDesc = FetchDescriptor<Loop.Album>(sortBy: [SortDescriptor(\.title)])
+            let albums = try context.fetch(albumDesc).map { AlbumDTO(from: $0) }
+            await cache.setAlbums(albums)
+            
+            // Load ALL artists
+            let artistDesc = FetchDescriptor<Loop.Artist>(sortBy: [SortDescriptor(\.name)])
+            let artists = try context.fetch(artistDesc).map { ArtistDTO(from: $0) }
+            await cache.setArtists(artists)
+            
+            // Load ALL genres
+            let genreDesc = FetchDescriptor<Loop.Genre>(sortBy: [SortDescriptor(\.name)])
+            let genres = try context.fetch(genreDesc).map { GenreDTO(from: $0) }
+            await cache.setGenres(genres)
+            
+            logger.info("✅ Loaded \(albums.count) albums, \(artists.count) artists, \(genres.count) genres into memory")
+        } catch {
+            logger.error("Failed to preload cache: \(error)")
         }
+    }
+    
+    // MARK: - INSTANT Reads from Cache
+    
+    nonisolated func getAlbums(offset: Int = 0, limit: Int = 100) async throws -> [AlbumDTO] {
+        let all = await cache.albums
+        let start = min(offset, all.count)
+        let end = min(start + limit, all.count)
+        return Array(all[start..<end])
+    }
+    
+    nonisolated func getArtists(offset: Int = 0, limit: Int = 100) async throws -> [ArtistDTO] {
+        let all = await cache.artists
+        let start = min(offset, all.count)
+        let end = min(start + limit, all.count)
+        return Array(all[start..<end])
+    }
+    
+    nonisolated func getGenres() async throws -> [GenreDTO] {
+        await cache.genres
     }
     
     nonisolated func getAlbum(id: String) async throws -> AlbumDTO? {
-        try await withCancellationCheck {
-            let context = ModelContext(modelContainer)
-            let predicate = #Predicate<Loop.Album> { $0.id == id }
-            var descriptor = FetchDescriptor<Loop.Album>(predicate: predicate)
-            descriptor.fetchLimit = 1
-            
-            guard let album = try context.fetch(descriptor).first else { return nil }
-            return AlbumDTO(from: album)
-        }
+        await cache.albums.first { $0.id == id }
     }
     
+    nonisolated func getArtist(id: String) async throws -> ArtistDTO? {
+        await cache.artists.first { $0.id == id }
+    }
+    
+    nonisolated func getAlbums(forArtist artistId: String) async throws -> [AlbumDTO] {
+        await cache.albums.filter { $0.artistId == artistId }
+    }
+    
+    nonisolated func getAlbums(forGenre genre: String) async throws -> [AlbumDTO] {
+        await cache.albums.filter { $0.genre?.localizedStandardContains(genre) ?? false }
+    }
+    
+    // ✅ CRITICAL: Songs must be fetched from DB (too many to cache)
     nonisolated func getSongs(for albumId: String) async throws -> [SongDTO] {
         try await withCancellationCheck {
             let context = ModelContext(modelContainer)
@@ -63,111 +123,45 @@ final class MusicRepository: Sendable {
         }
     }
     
-    nonisolated func getArtist(id: String) async throws -> ArtistDTO? {
+    nonisolated func song(id: String) async throws -> SongDTO? {
         try await withCancellationCheck {
             let context = ModelContext(modelContainer)
-            let predicate = #Predicate<Loop.Artist> { $0.id == id }
-            var descriptor = FetchDescriptor<Loop.Artist>(predicate: predicate)
+            let predicate = #Predicate<Loop.Song> { $0.id == id }
+            var descriptor = FetchDescriptor<Loop.Song>(predicate: predicate)
             descriptor.fetchLimit = 1
             
-            guard let artist = try context.fetch(descriptor).first else { return nil }
-            return ArtistDTO(from: artist)
-        }
-    }
-    
-    nonisolated func getAlbums(forArtist artistId: String) async throws -> [AlbumDTO] {
-        try await withCancellationCheck {
-            let context = ModelContext(modelContainer)
-            let predicate = #Predicate<Loop.Album> { $0.artistId == artistId }
-            let descriptor = FetchDescriptor<Loop.Album>(
-                predicate: predicate,
-                sortBy: [SortDescriptor(\.year, order: .reverse)]
-            )
-            
-            let albums = try context.fetch(descriptor)
-            return albums.map { AlbumDTO(from: $0) }
-        }
-    }
-    
-    nonisolated func getAlbums(forGenre genre: String, limit: Int = 500) async throws -> [AlbumDTO] {
-        try await withCancellationCheck {
-            let context = ModelContext(modelContainer)
-            let predicate = #Predicate<Loop.Album> {
-                $0.genre?.localizedStandardContains(genre) ?? false
-            }
-            var descriptor = FetchDescriptor<Loop.Album>(
-                predicate: predicate,
-                sortBy: [SortDescriptor(\.year, order: .reverse)]
-            )
-            descriptor.fetchLimit = limit
-            
-            let albums = try context.fetch(descriptor)
-            return albums.map { AlbumDTO(from: $0) }
-        }
-    }
-    
-    nonisolated func getAlbums(offset: Int = 0, limit: Int = 100) async throws -> [AlbumDTO] {
-        try await withCancellationCheck {
-            let context = ModelContext(modelContainer)
-            var descriptor = FetchDescriptor<Loop.Album>(sortBy: [SortDescriptor(\.year, order: .reverse)])
-            descriptor.fetchOffset = offset
-            descriptor.fetchLimit = limit
-            
-            let albums = try context.fetch(descriptor)
-            return albums.map { AlbumDTO(from: $0) }
-        }
-    }
-    
-    nonisolated func getArtists(offset: Int = 0, limit: Int = 100) async throws -> [ArtistDTO] {
-        try await withCancellationCheck {
-            let context = ModelContext(modelContainer)
-            var descriptor = FetchDescriptor<Loop.Artist>(sortBy: [SortDescriptor(\.name)])
-            descriptor.fetchOffset = offset
-            descriptor.fetchLimit = limit
-            
-            let artists = try context.fetch(descriptor)
-            return artists.map { ArtistDTO(from: $0) }
-        }
-    }
-    
-    nonisolated func getGenres() async throws -> [GenreDTO] {
-        try await withCancellationCheck {
-            let context = ModelContext(modelContainer)
-            let descriptor = FetchDescriptor<Loop.Genre>(sortBy: [SortDescriptor(\.name)])
-            let genres = try context.fetch(descriptor)
-            return genres.map { GenreDTO(from: $0) }
+            guard let song = try context.fetch(descriptor).first else { return nil }
+            return SongDTO(from: song)
         }
     }
     
     nonisolated func search(query: String) async throws -> SearchResults {
-        try await withCancellationCheck {
+        let albums = await cache.albums
+        let artists = await cache.artists
+        
+        let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanQuery.isEmpty else { return SearchResults() }
+        
+        let filteredAlbums = albums.filter { $0.title.localizedStandardContains(cleanQuery) }
+        let filteredArtists = artists.filter { $0.name.localizedStandardContains(cleanQuery) }
+        
+        // Songs from DB
+        let songs = try await withCancellationCheck {
             let context = ModelContext(modelContainer)
-            let cleanQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !cleanQuery.isEmpty else { return SearchResults() }
-            
-            // Songs
             let songPredicate = #Predicate<Loop.Song> { $0.title.localizedStandardContains(cleanQuery) }
             var songDesc = FetchDescriptor<Loop.Song>(predicate: songPredicate)
             songDesc.fetchLimit = 20
-            let songs = try context.fetch(songDesc).map { SongDTO(from: $0) }
-            
-            // Albums
-            let albumPredicate = #Predicate<Loop.Album> { $0.title.localizedStandardContains(cleanQuery) }
-            var albumDesc = FetchDescriptor<Loop.Album>(predicate: albumPredicate)
-            albumDesc.fetchLimit = 10
-            let albums = try context.fetch(albumDesc).map { AlbumDTO(from: $0) }
-            
-            // Artists
-            let artistPredicate = #Predicate<Loop.Artist> { $0.name.localizedStandardContains(cleanQuery) }
-            var artistDesc = FetchDescriptor<Loop.Artist>(predicate: artistPredicate)
-            artistDesc.fetchLimit = 5
-            let artists = try context.fetch(artistDesc).map { ArtistDTO(from: $0) }
-            
-            return SearchResults(songs: songs, albums: albums, artists: artists)
+            return try context.fetch(songDesc).map { SongDTO(from: $0) }
         }
+        
+        return SearchResults(
+            songs: Array(songs.prefix(20)),
+            albums: Array(filteredAlbums.prefix(10)),
+            artists: Array(filteredArtists.prefix(5))
+        )
     }
     
-    // MARK: - Writes (Background context)
+    // MARK: - Writes (Update cache after write)
     
     nonisolated func saveAlbums(_ remoteAlbums: [RemoteAlbum]) async throws {
         try await withCancellationCheck {
@@ -179,6 +173,9 @@ final class MusicRepository: Sendable {
             
             try context.save()
         }
+        
+        // ✅ Refresh cache
+        await preloadCache()
     }
     
     nonisolated func saveAlbumDetails(album: RemoteAlbumDetail, songs: [RemoteSong]) async throws {
@@ -218,6 +215,9 @@ final class MusicRepository: Sendable {
             
             try context.save()
         }
+        
+        // ✅ Refresh cache
+        await preloadCache()
     }
     
     // MARK: - Private Helpers
@@ -309,14 +309,13 @@ final class MusicRepository: Sendable {
         return artist
     }
     
-    // Helper to check cancellation
     private func withCancellationCheck<T>(_ operation: () throws -> T) throws -> T {
         try Task.checkCancellation()
         return try operation()
     }
 }
 
-// MARK: - DTOs (Value Types for Thread Safety)
+// MARK: - DTOs (unchanged)
 
 struct SongDTO: Identifiable, Sendable {
     let id: String

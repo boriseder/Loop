@@ -2,7 +2,7 @@
 //  NavidromeClient.swift
 //  Loop
 //
-//  FIXED: Swift 6 concurrency - nonisolated decoding
+//  FIXED: Explicit nonisolated decode to prevent Swift 6 warnings
 //
 
 import Foundation
@@ -33,7 +33,6 @@ actor NavidromeClient {
     // MARK: - Generic Fetch
     
     func fetch<T: Decodable>(_ endpoint: String, params: [String: String] = [:]) async throws -> T {
-        // Get credentials in isolated context
         guard let credentials = currentSession else {
             throw NetworkError.notAuthenticated
         }
@@ -48,12 +47,11 @@ actor NavidromeClient {
             throw NetworkError.invalidURL
         }
         
-        // ✅ FIX: Decode in nonisolated context via static method
         return try await Self.performFetch(url: url, session: session, logger: logger)
     }
     
-    // ✅ FIX: Static nonisolated fetch method for decoding
-    private static func performFetch<T: Decodable>(url: URL, session: URLSession, logger: Logger, attempt: Int = 1) async throws -> T {
+    // ✅ FIXED: Static nonisolated fetch method for decoding
+    private static nonisolated func performFetch<T: Decodable>(url: URL, session: URLSession, logger: Logger, attempt: Int = 1) async throws -> T {
         let maxRetries = 3
         
         do {
@@ -150,7 +148,6 @@ actor NavidromeClient {
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".randomElement()!
         })
         
-        // Inlined MD5 calculation to avoid isolation issues with extensions
         let input = "\(credentials.password)\(salt)"
         let digest = Insecure.MD5.hash(data: input.data(using: .utf8) ?? Data())
         let token = digest.map { String(format: "%02hhx", $0) }.joined()

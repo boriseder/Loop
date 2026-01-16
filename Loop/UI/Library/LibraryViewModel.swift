@@ -2,7 +2,7 @@
 //  LibraryViewModel.swift
 //  Loop
 //
-//  FIXED: Uses async MusicEnvironment, proper pagination support
+//  FIXED: Albums sorted alphabetically A-Z
 //
 
 import Foundation
@@ -30,29 +30,77 @@ final class LibraryViewModel {
     var artists: [ArtistDTO] = []
     var genres: [GenreDTO] = []
     
+    // ✅ NEW: Filtered results for downloaded-only mode
+    var filteredAlbums: [AlbumDTO] { showDownloadedOnly ? recentAlbums.filter { isAlbumDownloaded($0) } : recentAlbums }
+    var filteredArtists: [ArtistDTO] { showDownloadedOnly ? artists.filter { hasDownloadedAlbums(artistId: $0.id) } : artists }
+    var filteredGenres: [GenreDTO] { showDownloadedOnly ? genres.filter { hasDownloadedAlbums(genre: $0.name) } : genres }
+    
     var isLoading = false
     var statusMessage: String?
     var canLoadMore = true
+    var showDownloadedOnly = false
     
     private var currentOffset = 0
-    private let pageSize = 100  // Load 100 at a time
+    private let pageSize = 100
     
     private let music: MusicEnvironment
+    private let downloads: DownloadEnvironment
     
-    init(music: MusicEnvironment) {
+    // ✅ Cache of downloaded albums
+    private var downloadedAlbumIds: Set<String> = []
+    
+    init(music: MusicEnvironment, downloads: DownloadEnvironment) {
         self.music = music
+        self.downloads = downloads
     }
     
     func loadInitialData() async {
         isLoading = true
         await loadCurrentScope()
+        await updateDownloadedAlbums()
         
-        // For offline-first: Auto-sync on first launch if empty
+        // ✅ FIXED: Only auto-sync on first launch if empty
         if recentAlbums.isEmpty && artists.isEmpty && genres.isEmpty {
             statusMessage = "First launch - downloading library..."
             await refresh()
         }
+        
         isLoading = false
+    }
+    
+    func updateFilter(downloadedOnly: Bool) async {
+        showDownloadedOnly = downloadedOnly
+        await updateDownloadedAlbums()
+    }
+    
+    private func updateDownloadedAlbums() async {
+        // Build cache of downloaded album IDs
+        var downloaded = Set<String>()
+        
+        for album in recentAlbums {
+            do {
+                let songs = try await music.getSongs(for: album.id)
+                if downloads.isAlbumFullyDownloaded(songIds: songs.map(\.id)) {
+                    downloaded.insert(album.id)
+                }
+            } catch {
+                continue
+            }
+        }
+        
+        downloadedAlbumIds = downloaded
+    }
+    
+    private func isAlbumDownloaded(_ album: AlbumDTO) -> Bool {
+        downloadedAlbumIds.contains(album.id)
+    }
+    
+    private func hasDownloadedAlbums(artistId: String) -> Bool {
+        recentAlbums.contains { $0.artistId == artistId && downloadedAlbumIds.contains($0.id) }
+    }
+    
+    private func hasDownloadedAlbums(genre: String) -> Bool {
+        recentAlbums.contains { $0.genre == genre && downloadedAlbumIds.contains($0.id) }
     }
     
     func refresh() async {
@@ -61,10 +109,10 @@ final class LibraryViewModel {
             try await music.performSync()
             resetPagination()
             await loadCurrentScope()
+            await updateDownloadedAlbums()
             
             statusMessage = "✅ Offline library ready"
             
-            // Clear message after delay
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             statusMessage = nil
             
@@ -88,10 +136,13 @@ final class LibraryViewModel {
             switch scope {
             case .recent:
                 let newAlbums = try await music.getAlbums(offset: currentOffset, limit: pageSize)
+                // ✅ FIXED: Sort alphabetically by title
+                let sortedAlbums = newAlbums.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+                
                 if append {
-                    recentAlbums.append(contentsOf: newAlbums)
+                    recentAlbums.append(contentsOf: sortedAlbums)
                 } else {
-                    recentAlbums = newAlbums
+                    recentAlbums = sortedAlbums
                 }
                 canLoadMore = newAlbums.count == pageSize
                 print("📚 Loaded \(newAlbums.count) albums, total: \(recentAlbums.count)")
@@ -107,7 +158,7 @@ final class LibraryViewModel {
                 print("🎤 Loaded \(newArtists.count) artists, total: \(artists.count)")
                 
             case .genres:
-                if !append { // Genres loaded all at once
+                if !append {
                     genres = try await music.getGenres()
                     print("🎵 Loaded \(genres.count) genres")
                 }

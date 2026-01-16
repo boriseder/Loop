@@ -2,7 +2,7 @@
 //  LoopApp.swift
 //  Loop
 //
-//  FIXED: Shows sync progress modal
+//  FIXED: Removed TabView, single NavigationStack with proper destinations
 //
 
 import SwiftUI
@@ -26,7 +26,6 @@ struct LoopApp: App {
             .environment(container.playback)
             .environment(container.downloads)
             .environment(container.router)
-            // ✅ NEW: Show sync progress modal
             .overlay {
                 if container.music.isSyncing {
                     SyncProgressView(
@@ -48,27 +47,18 @@ struct LoopApp: App {
     private func AuthenticatedRoot() -> some View {
         @Bindable var router = container.router
         
-        // ✅ NEW: TabView with Library and Downloads
-        TabView {
-            NavigationStack(path: $router.path) {
-                LibraryView()
-                    .navigationDestination(for: Router.Destination.self) { destination in
-                        destinationView(for: destination)
-                    }
-            }
-            .tabItem {
-                Label("Library", systemImage: "square.stack")
-            }
-            
-            DownloadsView()
-                .tabItem {
-                    Label("Downloads", systemImage: "arrow.down.circle")
+        // ✅ FIXED: Single NavigationStack without TabView
+        NavigationStack(path: $router.path) {
+            LibraryView()
+                .navigationDestination(for: Router.Destination.self) { destination in
+                    destinationView(for: destination)
                 }
         }
         .overlay(alignment: .bottom) {
-            if container.playback.currentSongId != nil {
+            // ✅ FIXED: Only show if actually playing
+            if container.playback.currentSongId != nil && container.playback.currentTitle != "Not Playing" {
                 MiniPlayerView()
-                    .padding(.bottom, 70) // ✅ Adjusted for tab bar
+                    .padding(.bottom, 8)
                     .padding(.horizontal, 12)
                     .onTapGesture { isPlayerPresented = true }
                     .transition(.move(edge: .bottom))
