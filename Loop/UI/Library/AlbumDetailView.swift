@@ -19,12 +19,10 @@ struct AlbumDetailView: View {
                     
                     // MARK: - Header
                     VStack(spacing: 12) {
-                        // Cover Art
                         CoverArtView(coverArtId: vm.album?.coverArtId, size: 200)
                             .cornerRadius(12)
                             .shadow(radius: 8)
                         
-                        // Metadata
                         VStack(spacing: 4) {
                             Text(vm.album?.title ?? "Loading...")
                                 .font(.title2.bold())
@@ -35,21 +33,14 @@ struct AlbumDetailView: View {
                                 .foregroundStyle(.secondary)
                             
                             if let year = vm.album?.year {
-                                Text(String(year))
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                Text(String(year)).font(.caption).foregroundStyle(.tertiary)
                             }
                         }
                         
                         // Action Buttons
                         HStack(spacing: 20) {
                             Button {
-                                // ✅ FIX: Wrap in Task to call async method
-                                if let first = vm.songs.first {
-                                    Task {
-                                        await container.audio.setupPlayer(with: first.id, queue: vm.songs.map(\.id))
-                                    }
-                                }
+                                if let first = vm.songs.first { vm.play(song: first) }
                             } label: {
                                 Label("Play", systemImage: "play.fill")
                                     .font(.headline)
@@ -60,61 +51,64 @@ struct AlbumDetailView: View {
                                     .clipShape(Capsule())
                             }
                             
+                            // ✅ DYNAMIC DOWNLOAD BUTTON
                             Button {
-                                vm.downloadAlbum()
+                                vm.toggleDownload()
                             } label: {
-                                Label("Download", systemImage: "arrow.down.circle")
-                                    .font(.headline)
-                                    .padding(.horizontal, 24)
-                                    .padding(.vertical, 12)
-                                    .background(.ultraThinMaterial)
-                                    .clipShape(Capsule())
+                                Group {
+                                    switch vm.downloadState {
+                                    case .idle:
+                                        Label("Download", systemImage: "arrow.down.circle")
+                                    case .downloading:
+                                        HStack {
+                                            ProgressView().controlSize(.small)
+                                            Text("Downloading...")
+                                        }
+                                    case .downloaded:
+                                        Label("Downloaded", systemImage: "checkmark.circle.fill")
+                                            .foregroundStyle(Color.accentColor)
+                                    }
+                                }
+                                .font(.headline)
+                                .padding(.horizontal, 24)
+                                .padding(.vertical, 12)
+                                .background(.ultraThinMaterial)
+                                .clipShape(Capsule())
                             }
+                            .disabled(vm.downloadState == .downloading) // Prevent double taps
                         }
                     }
                     .padding(.top, 20)
                     
-                    Divider()
-                        .padding(.horizontal)
+                    Divider().padding(.horizontal)
                     
                     // MARK: - Tracklist
                     LazyVStack(spacing: 0) {
                         ForEach(vm.songs) { song in
                             Button {
-                                // ✅ FIX: Wrap in Task
-                                Task {
-                                    await container.audio.setupPlayer(with: song.id, queue: vm.songs.map(\.id))
-                                }
+                                vm.play(song: song)
                             } label: {
                                 HStack(spacing: 16) {
-                                    Text("\(song.trackNumber)")
+                                    Text(song.trackNumber > 0 ? "\(song.trackNumber)" : "-")
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
                                         .frame(width: 25, alignment: .trailing)
                                     
                                     VStack(alignment: .leading) {
-                                        Text(song.title)
-                                            .font(.body)
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(1)
-                                        
+                                        Text(song.title).font(.body).lineLimit(1)
                                         if let artist = song.artist {
-                                            Text(artist.name)
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
+                                            Text(artist.name).font(.caption).foregroundStyle(.secondary)
                                         }
                                     }
                                     
                                     Spacer()
                                     
-                                    // Download Indicator
                                     if container.downloads.isPinned(songId: song.id) {
                                         Image(systemName: "arrow.down.circle.fill")
                                             .font(.caption)
                                             .foregroundStyle(Color.accentColor)
                                     }
                                     
-                                    // Duration
                                     Text(formatDuration(song.duration))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -124,16 +118,13 @@ struct AlbumDetailView: View {
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            
-                            Divider()
-                                .padding(.leading, 50)
+                            Divider().padding(.leading, 50)
                         }
                     }
-                    .padding(.bottom, 100) // Spacer for MiniPlayer
+                    .padding(.bottom, 100)
                 }
             } else {
-                ProgressView()
-                    .padding(.top, 50)
+                ProgressView().padding(.top, 50)
             }
         }
         .navigationTitle("")
@@ -143,7 +134,8 @@ struct AlbumDetailView: View {
                 viewModel = AlbumDetailViewModel(
                     albumId: albumId,
                     repo: container.repo,
-                    downloads: container.downloads
+                    downloads: container.downloads,
+                    player: container.audio
                 )
             }
         }

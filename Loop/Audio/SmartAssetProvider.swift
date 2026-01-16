@@ -8,30 +8,33 @@
 import Foundation
 import AVFoundation
 
-/// A smart provider that decides whether to serve a local file or a remote stream.
-/// It wraps the DownloadManager to keep logic clean.
 final class SmartAssetProvider: AssetProvider {
-    
-    private let downloadManager: DownloadManager
     private let client: NavidromeClient
+    private let downloadManager: DownloadManager
     
-    init(downloadManager: DownloadManager, client: NavidromeClient) {
-        self.downloadManager = downloadManager
+    init(client: NavidromeClient, downloadManager: DownloadManager) {
         self.client = client
+        self.downloadManager = downloadManager
     }
     
-    // MARK: - AssetProvider Conformance
-    
-    func asset(for songId: String) -> AVAsset? {
-        // 1. Check Local File (Offline)
-        // ✅ FIX: Now calling the method we added to DownloadManager above
+    func asset(for songId: String) async -> AVAsset? {
+        // 1. Check Offline File
         if let localURL = downloadManager.localFileURL(for: songId),
-           FileManager.default.fileExists(atPath: localURL.path(percentEncoded: false)) {
+           FileManager.default.fileExists(atPath: localURL.path) {
+            print("🎧 Playing from local file: \(songId)")
             return AVURLAsset(url: localURL)
         }
         
-        // 2. Fallback to Remote Stream (Online)
-        guard let remoteURL = client.streamURL(for: songId) else { return nil }
-        return AVURLAsset(url: remoteURL)
+        // 2. Fallback to Network Stream
+        if let streamURL = client.streamURL(for: songId) {
+            print("📡 Streaming: \(songId)")
+            return AVURLAsset(url: streamURL)
+        }
+        
+        return nil
+    }
+    
+    func load(_ property: String) async throws -> Any? {
+        return nil // Not used directly
     }
 }

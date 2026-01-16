@@ -7,20 +7,21 @@
 
 import Foundation
 
-// ✅ The DTO that AudioEngine was missing
+// 1. The Data Model
 struct PlaybackState: Codable {
     let currentSongId: String
     let queue: [String]
     let elapsed: Double
 }
 
+// 2. The Protocol (Interface)
 protocol PlaybackPersistence {
     func save(_ state: PlaybackState)
     func load() -> PlaybackState?
 }
 
-// ✅ Concrete Implementation
-final class UserDefaultsPlaybackPersistence: PlaybackPersistence {
+// 3. The Concrete Implementation (The actual logic)
+struct UserDefaultsPersistence: PlaybackPersistence {
     private let key = "loop.playback.state"
     
     func save(_ state: PlaybackState) {

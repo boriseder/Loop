@@ -21,8 +21,12 @@ final class LibraryViewModel {
     
     // MARK: - State
     var selectedScope: LibraryScope = .albums
-    var showDownloadedOnly: Bool = false // ✅ RESTORED
+    var showDownloadedOnly: Bool = false
     
+    // Sync State
+    var isSyncing: Bool = false
+    
+    // Data
     var albums: [Loop.Album] = []
     var artists: [Loop.Artist] = []
     var genres: [Loop.Genre] = []
@@ -33,7 +37,6 @@ final class LibraryViewModel {
     
     var searchText: String = ""
     
-    // MARK: - Dependencies
     private let repo: MusicRepository
     private let downloads: DownloadManager
     private let logger = Logger(subsystem: "com.loopapp", category: "Library")
@@ -43,18 +46,12 @@ final class LibraryViewModel {
         self.downloads = downloads
     }
     
-    // MARK: - Filter Logic (RESTORED)
-    
+    // MARK: - Filter Logic
     var filteredAlbums: [Loop.Album] {
         var result = albums
-        
         if showDownloadedOnly {
-            result = result.filter { album in
-                // Keep album if ANY song is downloaded
-                album.songs.contains { downloads.isPinned(songId: $0.id) }
-            }
+            result = result.filter { album in album.songs.contains { downloads.isPinned(songId: $0.id) } }
         }
-        
         if !searchText.isEmpty {
             result = result.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
         }
@@ -63,13 +60,9 @@ final class LibraryViewModel {
     
     var filteredArtists: [Loop.Artist] {
         var result = artists
-        
         if showDownloadedOnly {
-            result = result.filter { artist in
-                artist.songs.contains { downloads.isPinned(songId: $0.id) }
-            }
+            result = result.filter { artist in artist.songs.contains { downloads.isPinned(songId: $0.id) } }
         }
-        
         if !searchText.isEmpty {
             result = result.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
         }
@@ -78,16 +71,10 @@ final class LibraryViewModel {
     
     var filteredGenres: [Loop.Genre] {
         var result = genres
-        
         if showDownloadedOnly {
-            // Find genres associated with downloaded albums
-            let downloadedGenres = Set(albums.filter { album in
-                album.songs.contains { downloads.isPinned(songId: $0.id) }
-            }.compactMap { $0.genre })
-            
+            let downloadedGenres = Set(albums.filter { album in album.songs.contains { downloads.isPinned(songId: $0.id) } }.compactMap { $0.genre })
             result = result.filter { downloadedGenres.contains($0.name) }
         }
-        
         if !searchText.isEmpty {
             result = result.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
         }
@@ -103,46 +90,41 @@ final class LibraryViewModel {
     }
 
     // MARK: - Actions
-    
     func loadInitialData() async {
         isLoading = true
         errorMessage = nil
-        statusMessage = "Loading library..."
         
-        do {
-            async let fetchedAlbums = repo.getAlbums(limit: 500)
-            async let fetchedArtists = repo.getArtists()
-            async let fetchedGenres = repo.getGenres()
-            
-            let (newAlbums, newArtists, newGenres) = try await (fetchedAlbums, fetchedArtists, fetchedGenres)
-            
-            self.albums = newAlbums
-            self.artists = newArtists
-            self.genres = newGenres
-            
-            performSync()
-            
-        } catch {
-            logger.error("Failed to load library: \(error)")
-            errorMessage = "Failed to load library."
-        }
-        
+        // 1. Load what we have locally immediately
+        await refreshLocalData()
         isLoading = false
-        statusMessage = nil
+        
+        // 2. Trigger Smart Sync (Prioritized)
+        performSmartSync()
     }
     
-    func performSync() {
+    func performSmartSync() {
         Task {
-            statusMessage = "Syncing..."
-            do {
-                try await repo.syncAlbums()
-                self.albums = try await repo.getAlbums(limit: 500)
-                self.artists = try await repo.getArtists()
-                self.genres = try await repo.getGenres()
-            } catch {
-                logger.error("Sync failed: \(error)")
+            await repo.syncSmart { [weak self] syncing in
+                self?.isSyncing = syncing
+                // Whenever sync state updates, likely data updated too, so refresh local view
+                Task { await self?.refreshLocalData() }
             }
-            statusMessage = nil
+        }
+    }
+    
+    func refreshLocalData() async {
+        do {
+            // We fetch a decent amount to fill the UI.
+            // In a real optimized app, this would be paginated or use @Query in the View.
+            let fetchedAlbums = try await repo.getAlbums(limit: 5000)
+            let fetchedArtists = try await repo.getArtists()
+            let fetchedGenres = try await repo.getGenres()
+            
+            self.albums = fetchedAlbums
+            self.artists = fetchedArtists
+            self.genres = fetchedGenres
+        } catch {
+            logger.error("Refresh failed: \(error)")
         }
     }
 }

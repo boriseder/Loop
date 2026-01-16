@@ -7,61 +7,79 @@
 
 import SwiftUI
 import Observation
-import OSLog
 
 @Observable @MainActor
 final class AlbumDetailViewModel {
     
-    // MARK: - State
-    var songs: [Song] = []
-    var album: Album?
-    var isLoading = false
+    enum DownloadState {
+        case idle
+        case downloading
+        case downloaded
+    }
     
-    // MARK: - Dependencies
+    var album: Loop.Album?
+    var songs: [Loop.Song] = []
+    var isLoading = false
+    var downloadState: DownloadState = .idle
+    
     private let albumId: String
     private let repo: MusicRepository
     private let downloads: DownloadManager
-    private let logger = Logger(subsystem: "com.loopapp", category: "AlbumDetail")
+    private let player: AudioEngine
     
-    init(albumId: String, repo: MusicRepository, downloads: DownloadManager) {
+    init(albumId: String, repo: MusicRepository, downloads: DownloadManager, player: AudioEngine) {
         self.albumId = albumId
         self.repo = repo
         self.downloads = downloads
+        self.player = player
     }
-    
-    // MARK: - Actions
     
     func load() async {
+        self.album = repo.getLocalAlbum(id: albumId)
+        self.songs = repo.getLocalSongs(for: albumId)
+        updateDownloadState()
+        
         isLoading = true
+        await repo.syncAlbumDetails(albumId: albumId)
         
-        // 1. Sync Details (Get Tracks)
-        try? await repo.syncAlbumDetails(albumId: albumId)
-        
-        // 2. Fetch from DB
-        do {
-            self.songs = try await repo.getSongs(for: albumId)
-            
-            // Fetch the Album object itself for the header
-            // (We reuse the existing songs list to find the parent if needed, or fetch separately)
-            if let firstSong = songs.first {
-                self.album = firstSong.album
-            }
-        } catch {
-            logger.error("Failed to load album details: \(error)")
-        }
-        
+        self.songs = repo.getLocalSongs(for: albumId)
         isLoading = false
+        updateDownloadState()
     }
     
-    // ✅ FIX: Download all songs in the album
-    func downloadAlbum() {
-        guard !songs.isEmpty else { return }
-        
-        Task {
-            for song in songs {
-                // We await each one to add them to the queue
-                await downloads.download(song: song)
+    func toggleDownload() {
+        switch downloadState {
+        case .downloaded:
+            // Delete logic (optional, for now we just keep it simple)
+            for song in songs { downloads.deleteDownload(song: song) }
+            updateDownloadState()
+            
+        case .idle:
+            downloadState = .downloading
+            Task {
+                await downloads.downloadAlbum(albumId: albumId, songs: songs)
+                updateDownloadState()
             }
+            
+        case .downloading:
+            break // Already working
+        }
+    }
+    
+    func updateDownloadState() {
+        if downloads.isDownloading(albumId: albumId) {
+            downloadState = .downloading
+        } else if !songs.isEmpty && downloads.isAlbumFullyDownloaded(songIds: songs.map(\.id)) {
+            downloadState = .downloaded
+        } else {
+            downloadState = .idle
+        }
+    }
+    
+    func play(song: Loop.Song) {
+        let songIds = songs.map { $0.id }
+        Task {
+            await player.setupPlayer(with: song.id, queue: songIds)
         }
     }
 }

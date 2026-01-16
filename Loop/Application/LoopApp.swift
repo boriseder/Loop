@@ -10,43 +10,37 @@ import SwiftUI
 @main
 struct LoopApp: App {
     @State private var container = AppContainer()
+    @State private var isPlayerPresented = false
     
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environment(container)
-        }
-    }
-}
-
-struct ContentView: View {
-    @Environment(AppContainer.self) private var container
-    @State private var isPlayerPresented = false
-    
-    var body: some View {
-        @Bindable var router = container.router
-        
-        NavigationStack(path: $router.path) {
-            LibraryView()
-                .navigationDestination(for: Router.Destination.self) { destination in
-                    destinationView(for: destination)
-                }
-        }
-        .overlay(alignment: .bottom) {
-            if container.audio.currentSongId != nil {
-                MiniPlayerView()
-                    .padding(.bottom, 20)
-                    .padding(.horizontal, 12)
-                    .onTapGesture {
-                        isPlayerPresented = true
+            @Bindable var router = container.router
+            
+            NavigationStack(path: $router.path) {
+                LibraryView()
+                    .navigationDestination(for: Router.Destination.self) { destination in
+                        destinationView(for: destination)
                     }
-                    .transition(.move(edge: .bottom))
             }
-        }
-        // ✅ RESTORED: Sheet for Full Player
-        .sheet(isPresented: $isPlayerPresented) {
-            PlayerView(isPresented: $isPlayerPresented)
-                .presentationDragIndicator(.visible)
+            // ✅ FIX: Overlay attached to Stack (inside the Environment scope)
+            .overlay(alignment: .bottom) {
+                if container.audio.currentSongId != nil {
+                    MiniPlayerView()
+                        .padding(.bottom, 20)
+                        .padding(.horizontal, 12)
+                        .onTapGesture {
+                            isPlayerPresented = true
+                        }
+                        .transition(.move(edge: .bottom))
+                }
+            }
+            // ✅ FIX: Sheet attached to Stack (inside the Environment scope)
+            .sheet(isPresented: $isPlayerPresented) {
+                PlayerView(isPresented: $isPlayerPresented)
+                    .presentationDragIndicator(.visible)
+            }
+            // ✅ FIX: Environment applied LAST so it injects into Stack + Overlay + Sheet
+            .environment(container)
         }
     }
     

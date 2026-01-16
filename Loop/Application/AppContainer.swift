@@ -6,46 +6,42 @@
 //
 
 import Foundation
-import SwiftData
 import Observation
 
 @Observable
 final class AppContainer {
     
-    // Core Services
+    // Core Dependencies
     let client: NavidromeClient
     let db: MusicDatabase
     let repo: MusicRepository
-    let router: Router
-    
-    // Feature Services
     let downloads: DownloadManager
     let audio: AudioEngine
     
+    // Navigation
+    var router = Router()
+    
     init() {
-        // 1. Foundation
-        self.client = NavidromeClient()
-        self.db = MusicDatabase()
-        self.router = Router()
+        // 1. Setup Client & DB
+        let client = NavidromeClient()
+        let db = MusicDatabase()
         
-        // 2. Data Layer
+        self.client = client
+        self.db = db
+        
+        // 2. Setup Repo & Downloads
         self.repo = MusicRepository(db: db, client: client)
-        
-        // 3. Downloads (Now constructed correctly)
-        // ✅ FIX: Pass 'client' to the init
         self.downloads = DownloadManager(client: client)
         
-        // 4. Persistence
-        let persistence = UserDefaultsPlaybackPersistence()
+        // 3. Setup Audio Stack
+        let assetProvider = SmartAssetProvider(client: client, downloadManager: self.downloads)
         
-        // 5. Audio Engine
+        // ✅ FIX: Use 'UserDefaultsPersistence()' (Concrete) instead of 'PlaybackPersistence()' (Protocol)
         self.audio = AudioEngine(
-            provider: downloads, // ✅ Now conforms to AssetProvider
-            stateStore: persistence,
-            repo: repo,
+            provider: assetProvider,
+            stateStore: UserDefaultsPersistence(),
+            repo: self.repo,
             client: client
         )
-        
-        print("✅ Loop AppContainer Initialized")
     }
 }

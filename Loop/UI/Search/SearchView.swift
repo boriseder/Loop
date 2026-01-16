@@ -12,99 +12,113 @@ struct SearchView: View {
     @State private var viewModel: SearchViewModel?
     
     var body: some View {
-        // ✅ FIX: Removed NavigationStack - use the parent's navigation context
-        List {
-            if let vm = viewModel {
-                searchResults(for: vm)
-            } else {
-                ProgressView()
+        NavigationStack {
+            ScrollView {
+                if let vm = viewModel {
+                    if vm.isLoading {
+                        ProgressView().padding(.top, 50)
+                    } else if vm.searchText.isEmpty {
+                        ContentUnavailableView("Search", systemImage: "magnifyingglass", description: Text("Search your Navidrome server"))
+                            .padding(.top, 50)
+                    } else if vm.albums.isEmpty && vm.artists.isEmpty && vm.songs.isEmpty {
+                        ContentUnavailableView.search(text: vm.searchText)
+                            .padding(.top, 50)
+                    } else {
+                        resultsList(vm: vm)
+                    }
+                }
             }
-        }
-        .listStyle(.plain)
-        .navigationTitle(Text("Search", comment: "Navigation title"))
-        .searchable(
-            text: queryBinding,
-            placement: .automatic,
-            prompt: Text("Songs, Albums, Artists...", comment: "Search placeholder")
-        )
-        .searchScopes(scopeBinding) {
-            ForEach(SearchViewModel.SearchScope.allCases) { scope in
-                Text(scope.localizedName).tag(scope)
+            .navigationTitle("Search")
+            .searchable(text: Binding(
+                get: { viewModel?.searchText ?? "" },
+                set: { viewModel?.searchText = $0 }
+            ), prompt: "Artists, Albums, Songs...")
+            .onSubmit(of: .search) {
+                Task { await viewModel?.performSearch() }
             }
-        }
-        .onAppear {
-            if viewModel == nil {
-                viewModel = SearchViewModel(repo: container.repo)
+            .onAppear {
+                if viewModel == nil {
+                    viewModel = SearchViewModel(client: container.client, repo: container.repo)
+                }
             }
         }
     }
     
-    // MARK: - Bindings
-    private var queryBinding: Binding<String> {
-        Binding(get: { viewModel?.query ?? "" }, set: { viewModel?.query = $0 })
-    }
-    
-    private var scopeBinding: Binding<SearchViewModel.SearchScope> {
-        Binding(get: { viewModel?.selectedScope ?? .all }, set: { viewModel?.selectedScope = $0 })
-    }
-    
-    // MARK: - View Builders
     @ViewBuilder
-    private func searchResults(for vm: SearchViewModel) -> some View {
-        if vm.isLoading {
-            HStack { Spacer(); ProgressView(); Spacer() }.listRowSeparator(.hidden)
-        }
-        
-        if let error = vm.errorMessage {
-            Text(error).foregroundStyle(.red).font(.caption).listRowSeparator(.hidden)
-        }
-        
-        // Results: Songs
-        if !vm.displayedSongs.isEmpty {
-            Section(header: Text("Songs", comment: "Section header")) {
-                ForEach(vm.displayedSongs, id: \.id) { song in
-                    Button {
-                        Task {
-                            await container.audio.setupPlayer(with: song.id, queue: vm.displayedSongs.map(\.id))
-                        }
-                    } label: {
-                        HStack {
-                            if let album = song.album {
-                                CoverArtView(coverArtId: album.coverArtId, size: 40).cornerRadius(4)
-                            }
-                            VStack(alignment: .leading) {
-                                Text(song.title).lineLimit(1)
-                                Text(song.artist?.name ?? "Unknown").font(.caption).foregroundStyle(.secondary)
+    private func resultsList(vm: SearchViewModel) -> some View {
+        LazyVStack(alignment: .leading, spacing: 20) {
+            
+            // Artists
+            if !vm.artists.isEmpty {
+                Text("Artists").font(.title2.bold()).padding(.horizontal).padding(.top, 10)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 16) {
+                        ForEach(vm.artists, id: \.id) { artist in
+                            NavigationLink(value: Router.Destination.artistDetail(artistId: artist.id)) {
+                                VStack {
+                                    Image(systemName: "music.mic.circle.fill")
+                                        .font(.system(size: 60))
+                                        .foregroundStyle(.secondary)
+                                    Text(artist.name)
+                                        .font(.caption)
+                                        .lineLimit(1)
+                                        .foregroundStyle(.primary)
+                                }
+                                .frame(width: 80)
                             }
                         }
                     }
+                    .padding(.horizontal)
                 }
             }
-        }
-        
-        // Results: Albums
-        if !vm.displayedAlbums.isEmpty {
-            Section(header: Text("Albums", comment: "Section header")) {
-                ForEach(vm.displayedAlbums, id: \.id) { album in
-                    NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
-                        HStack {
-                            CoverArtView(coverArtId: album.coverArtId, size: 40).cornerRadius(4)
-                            Text(album.title).lineLimit(1)
+            
+            // Albums
+            if !vm.albums.isEmpty {
+                Text("Albums").font(.title2.bold()).padding(.horizontal).padding(.top, 10)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 16) {
+                        ForEach(vm.albums, id: \.id) { album in
+                            NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
+                                VStack(alignment: .leading) {
+                                    CoverArtView(coverArtId: album.coverArtId, size: 120)
+                                        .cornerRadius(8)
+                                    Text(album.title)
+                                        .font(.caption)
+                                        .bold()
+                                        .lineLimit(1)
+                                        .foregroundStyle(.primary)
+                                }
+                                .frame(width: 120)
+                            }
                         }
                     }
+                    .padding(.horizontal)
                 }
             }
-        }
-        
-        // Results: Artists
-        if !vm.displayedArtists.isEmpty {
-            Section(header: Text("Artists", comment: "Section header")) {
-                ForEach(vm.displayedArtists, id: \.id) { artist in
-                    NavigationLink(value: Router.Destination.artistDetail(artistId: artist.id)) {
-                        Text(artist.name)
+            
+            // Songs
+            if !vm.songs.isEmpty {
+                Text("Songs").font(.title2.bold()).padding(.horizontal).padding(.top, 10)
+                ForEach(vm.songs, id: \.id) { song in
+                    HStack {
+                        CoverArtView(coverArtId: song.album?.coverArtId, size: 40)
+                            .cornerRadius(4)
+                        VStack(alignment: .leading) {
+                            Text(song.title).font(.body).lineLimit(1)
+                            Text(song.artist?.name ?? "Unknown").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            Task { await container.audio.setupPlayer(with: song.id, queue: [song.id]) }
+                        } label: {
+                            Image(systemName: "play.circle").font(.title2)
+                        }
                     }
+                    .padding(.horizontal)
+                    Divider().padding(.leading, 60)
                 }
             }
         }
+        .padding(.bottom, 80)
     }
 }

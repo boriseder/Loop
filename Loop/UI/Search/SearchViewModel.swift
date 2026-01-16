@@ -12,127 +12,105 @@ import OSLog
 @Observable @MainActor
 final class SearchViewModel {
     
-    // MARK: - Enums
-    enum SearchScope: String, CaseIterable, Identifiable {
-        case all = "All"
-        case songs = "Songs"
-        case albums = "Albums"
-        case artists = "Artists"
-        
-        var id: Self { self }
-        
-        var localizedName: String {
-            NSLocalizedString(self.rawValue, comment: "Search scope")
-        }
-    }
-    
     // MARK: - State
-    var query: String = "" {
+    var searchText: String = "" {
         didSet {
-            // Debounce logic could go here, for now we rely on the View's .onSubmit or .onChange
-            if query.isEmpty {
-                clearResults()
-            } else {
-                Task { await search() }
+            // Cancel previous task to debounce
+            searchTask?.cancel()
+            searchTask = Task {
+                try? await Task.sleep(for: .milliseconds(500))
+                if !Task.isCancelled {
+                    await performSearch()
+                }
             }
         }
     }
     
-    var selectedScope: SearchScope = .all
-    var isLoading: Bool = false
+    // Domain Models
+    var albums: [Loop.Album] = []
+    var artists: [Loop.Artist] = []
+    var songs: [Loop.Song] = []
+    
+    var isLoading = false
     var errorMessage: String?
     
-    // Results
-    // We use the Database models directly so the View can reuse components
-    var displayedSongs: [Song] = []
-    var displayedAlbums: [Album] = []
-    var displayedArtists: [Artist] = []
+    private var searchTask: Task<Void, Never>?
     
     // MARK: - Dependencies
+    private let client: NavidromeClient
     private let repo: MusicRepository
     private let logger = Logger(subsystem: "com.loopapp", category: "Search")
     
-    init(repo: MusicRepository) {
+    init(client: NavidromeClient, repo: MusicRepository) {
+        self.client = client
         self.repo = repo
     }
     
     // MARK: - Actions
     
-    func search() async {
-        guard !query.isEmpty else { return }
+    func performSearch() async {
+        guard !searchText.isEmpty else {
+            clearResults()
+            return
+        }
         
         isLoading = true
         errorMessage = nil
         
         do {
-            let (remoteSongs, remoteAlbums, remoteArtists) = try await repo.search(query: query)
+            // ✅ FIX: Destructure the tuple (Songs, Albums, Artists)
+            let (remoteSongs, remoteAlbums, remoteArtists) = try await client.search(query: searchText)
             
-            // Map Remote DTOs to Transient Local Models (not saving to DB yet)
-            // We create temporary instances just for display
+            // Map Remote DTOs to Domain Models manually
             
-            // 1. Map Songs
-            self.displayedSongs = remoteSongs.map { remote in
-                Song(
-                    id: remote.id,
-                    title: remote.title,
-                    trackNumber: remote.track ?? 0,
-                    duration: TimeInterval(remote.duration ?? 0),
-                    path: remote.path ?? "",
-                    artistId: remote.artist ?? "unknown", // Search result might lack ID, using name as fallback if needed
-                    albumId: remote.albumId ?? "unknown"
-                )
-            }
-            
-            // 2. Map Albums (✅ FIX: Added coverArtId, year, genre)
-            self.displayedAlbums = remoteAlbums.map { remote in
-                Album(
+            // 1. Map Albums
+            self.albums = remoteAlbums.map { remote in
+                Loop.Album(
                     id: remote.id,
                     title: remote.name,
                     artistId: remote.artistId,
-                    coverArtId: remote.coverArt, // Passed correctly
-                    year: remote.year,           // Passed correctly
-                    genre: remote.genre          // Passed correctly
+                    coverArtId: remote.coverArt,
+                    year: remote.year,
+                    genre: remote.genre
                 )
             }
             
-            // 3. Map Artists
-            self.displayedArtists = remoteArtists.map { remote in
-                Artist(
+            // 2. Map Artists
+            self.artists = remoteArtists.map { remote in
+                Loop.Artist(
                     id: remote.id,
                     name: remote.name
                 )
             }
             
-            // Filter based on Scope
-            filterResults()
+            // 3. Map Songs
+            self.songs = remoteSongs.map { remote in
+                Loop.Song(
+                    id: remote.id,
+                    title: remote.title,
+                    trackNumber: remote.track ?? 0,
+                    duration: TimeInterval(remote.duration ?? 0),
+                    path: remote.path ?? "",
+                    artistId: "unknown", // Search result usually lacks strict Artist ID, relies on name
+                    albumId: remote.albumId ?? "unknown"
+                )
+            }
             
         } catch {
             logger.error("Search failed: \(error)")
-            errorMessage = "Search failed. Please try again."
+            if !searchText.isEmpty {
+                errorMessage = "Could not search server."
+            }
         }
         
         isLoading = false
     }
     
-    private func filterResults() {
-        switch selectedScope {
-        case .all:
-            break // Show everything
-        case .songs:
-            displayedAlbums = []
-            displayedArtists = []
-        case .albums:
-            displayedSongs = []
-            displayedArtists = []
-        case .artists:
-            displayedSongs = []
-            displayedAlbums = []
-        }
-    }
-    
     private func clearResults() {
-        displayedSongs = []
-        displayedAlbums = []
-        displayedArtists = []
+        albums = []
+        artists = []
+        songs = []
+        isLoading = false
+        errorMessage = nil
     }
 }

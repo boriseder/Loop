@@ -2,30 +2,21 @@
 //  GenreDetailViewModel.swift
 //  Loop
 //
-//  Created by Boris Eder on 15.01.26.
-//
-
-
-//
-//  GenreDetailViewModel.swift
-//  Loop
-//
 //  Created by Architecture Blueprint v6.3
 //
 
 import SwiftUI
 import Observation
-import OSLog
 
 @Observable @MainActor
 final class GenreDetailViewModel {
     
-    var genreName: String
     var albums: [Loop.Album] = []
     var isLoading = false
     
+    // ✅ FIX: Removed 'private' so the View can access it
+    let genreName: String
     private let repo: MusicRepository
-    private let logger = Logger(subsystem: "com.loopapp", category: "GenreDetail")
     
     init(genreName: String, repo: MusicRepository) {
         self.genreName = genreName
@@ -37,7 +28,7 @@ final class GenreDetailViewModel {
         do {
             self.albums = try await repo.getAlbums(forGenre: genreName)
         } catch {
-            logger.error("Failed to load albums for genre \(self.genreName): \(error)")
+            print("Failed to load genre: \(error)")
         }
         isLoading = false
     }

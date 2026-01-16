@@ -14,18 +14,15 @@ import UIKit
 @Observable @MainActor
 final class AudioEngine {
     
-    // MARK: - State
     var isPlaying: Bool = false
     var currentSongId: String?
     var progress: Double = 0.0
     var duration: Double = 0.0
     
-    // UI Metadata State
     var currentTitle: String = "Not Playing"
     var currentArtist: String = ""
     var currentCoverId: String?
     
-    // MARK: - Dependencies
     private let provider: AssetProvider
     private let stateStore: PlaybackPersistence
     private let repo: MusicRepository
@@ -44,24 +41,15 @@ final class AudioEngine {
         setupObservers()
         setupRemoteTransportControls()
         
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch {
-            print("❌ Audio Session Error: \(error)")
-        }
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        try? AVAudioSession.sharedInstance().setActive(true)
         
-        Task {
-            await restoreState()
-        }
+        Task { await restoreState() }
     }
-    
-    // MARK: - Player Actions
     
     func setupPlayer(with currentId: String, queue: [String], autoPlay: Bool = true) async {
         player.pause()
         player.removeAllItems()
-        
         let startIndex = queue.firstIndex(of: currentId) ?? 0
         let batch = queue[startIndex..<min(startIndex + 3, queue.count)]
         
@@ -72,39 +60,28 @@ final class AudioEngine {
         }
         
         self.currentSongId = currentId
-        
-        // Reset Metadata
         self.currentTitle = "Loading..."
         self.currentArtist = ""
         self.currentCoverId = nil
         
         let durationValue = await getDuration()
-        
         self.nowPlayingInfo = [
             MPMediaItemPropertyTitle: "Loading...",
             MPMediaItemPropertyArtist: "Unknown Artist",
-            MPMediaItemPropertyAlbumTitle: "",
             MPMediaItemPropertyPlaybackDuration: durationValue,
             MPNowPlayingInfoPropertyPlaybackRate: autoPlay ? 1.0 : 0.0,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: 0.0
         ]
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
         
-        if autoPlay {
-            play()
-        }
-        
+        if autoPlay { play() }
         await loadMetadata(for: currentId)
-        
         saveState(queue: queue)
     }
     
-    // ✅ ADDED: Seek Method
     func seek(to seconds: Double) {
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
         player.seek(to: time)
-        
-        // Update Now Playing info immediately for snappy UI
         nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = seconds
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
     }
@@ -115,9 +92,7 @@ final class AudioEngine {
             let duration = try await item.asset.load(.duration)
             let seconds = duration.seconds
             return seconds.isFinite && seconds > 0 ? seconds : 180.0
-        } catch {
-            return 180.0
-        }
+        } catch { return 180.0 }
     }
 
     func play() {
@@ -141,11 +116,10 @@ final class AudioEngine {
         saveState()
     }
     
-    // MARK: - Metadata Logic
-    
     private func loadMetadata(for songId: String) async {
         await repo.ensureSongExists(id: songId)
         
+        // ✅ FIX: Calls the repo method that is now guaranteed to exist
         guard let song = await repo.song(id: songId) else { return }
         
         self.currentTitle = song.title
@@ -158,15 +132,11 @@ final class AudioEngine {
         if song.duration > 0 {
             nowPlayingInfo[MPMediaItemPropertyPlaybackDuration] = song.duration
         }
-        
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
         
         if let coverId = song.album?.coverArtId {
             let url = client.coverArtURL(id: coverId, size: 600)
-            
-            if let url = url,
-               let data = try? await client.downloadData(from: url),
-               let image = UIImage(data: data) {
+            if let url = url, let data = try? await client.downloadData(from: url), let image = UIImage(data: data) {
                 let art = MPMediaItemArtwork(boundsSize: image.size) { _ in return image }
                 nowPlayingInfo[MPMediaItemPropertyArtwork] = art
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
@@ -174,37 +144,17 @@ final class AudioEngine {
         }
     }
 
-    private func updatePlaybackRate() {
-        guard !nowPlayingInfo.isEmpty else { return }
-        nowPlayingInfo[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? 1.0 : 0.0
-        nowPlayingInfo[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentTime().seconds
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
-    }
-    
-    // MARK: - Persistence
-    
     private func saveState(queue: [String]? = nil) {
         guard let currentSongId else { return }
-        
-        let state = PlaybackState(
-            currentSongId: currentSongId,
-            queue: queue ?? [],
-            elapsed: player.currentTime().seconds
-        )
-        
+        let state = PlaybackState(currentSongId: currentSongId, queue: queue ?? [], elapsed: player.currentTime().seconds)
         stateStore.save(state)
     }
     
     private func restoreState() async {
         guard let saved: PlaybackState = stateStore.load() else { return }
-        
-        print("💾 Restoring playback state: \(saved.currentSongId)")
-        
         await setupPlayer(with: saved.currentSongId, queue: saved.queue, autoPlay: false)
         await player.seek(to: CMTime(seconds: saved.elapsed, preferredTimescale: 600))
     }
-    
-    // MARK: - Remote Controls & Observers
     
     private func setupRemoteTransportControls() {
         let commandCenter = MPRemoteCommandCenter.shared()
@@ -214,8 +164,7 @@ final class AudioEngine {
     }
     
     private func setupObservers() {
-        let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
-        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { [weak self] time in
             Task { @MainActor [weak self] in self?.updateProgress(time: time) }
         }
     }

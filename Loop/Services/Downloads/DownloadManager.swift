@@ -6,115 +6,130 @@
 //
 
 import Foundation
-import AVFoundation
 import Observation
 import OSLog
 
-@Observable
-final class DownloadManager: AssetProvider {
+@Observable @MainActor
+final class DownloadManager {
     
     // MARK: - State
-    var activeDownloads: Set<String> = []
+    private(set) var activeDownloads: Set<String> = [] // Track Song IDs or Album IDs being processed
     
     // MARK: - Dependencies
     private let client: NavidromeClient
     private let fileManager = FileManager.default
-    private let logger = Logger(subsystem: "com.loopapp", category: "DownloadManager")
-    
-    // MARK: - Paths
-    private var documentsDirectory: URL {
-        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-    }
-    
-    private var downloadsDirectory: URL {
-        documentsDirectory.appendingPathComponent("LoopDownloads", conformingTo: .directory)
-    }
+    private let logger = Logger(subsystem: "com.loopapp", category: "Downloads")
     
     init(client: NavidromeClient) {
         self.client = client
-        try? fileManager.createDirectory(at: downloadsDirectory, withIntermediateDirectories: true)
+        createDirectories()
+    }
+    
+    // MARK: - Paths
+    
+    private var musicDirectory: URL {
+        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Music")
+    }
+    
+    private var coversDirectory: URL {
+        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Covers")
+    }
+    
+    private func createDirectories() {
+        try? fileManager.createDirectory(at: musicDirectory, withIntermediateDirectories: true)
+        try? fileManager.createDirectory(at: coversDirectory, withIntermediateDirectories: true)
+    }
+    
+    func localFileURL(for songId: String) -> URL? {
+        let path = musicDirectory.appendingPathComponent("\(songId).mp3") // Simplified extension logic
+        return path
+    }
+    
+    func localCoverURL(for coverId: String) -> URL {
+        return coversDirectory.appendingPathComponent("\(coverId).jpg")
+    }
+    
+    // MARK: - Status Checks
+    
+    func isPinned(songId: String) -> Bool {
+        guard let url = localFileURL(for: songId) else { return false }
+        return fileManager.fileExists(atPath: url.path)
+    }
+    
+    func isAlbumFullyDownloaded(songIds: [String]) -> Bool {
+        guard !songIds.isEmpty else { return false }
+        return songIds.allSatisfy { isPinned(songId: $0) }
+    }
+    
+    func isDownloading(albumId: String) -> Bool {
+        return activeDownloads.contains(albumId)
     }
     
     // MARK: - Actions
     
-    func download(song: Song) async {
-        guard !isPinned(songId: song.id) else { return }
+    func download(song: Loop.Song) async {
+        guard let url = localFileURL(for: song.id) else { return }
         
-        _ = await MainActor.run { activeDownloads.insert(song.id) }
-        defer { Task { @MainActor in activeDownloads.remove(song.id) } }
-        
-        logger.info("⬇️ Starting download for: \(song.title)")
-        
-        do {
-            // 1. Get Stream URL (nonisolated, no await needed)
-            guard let remoteURL = client.streamURL(for: song.id) else {
-                throw URLError(.badURL)
-            }
-            
-            // 2. Download Data (async call to actor)
-            let data = try await client.downloadData(from: remoteURL)
-            
-            // 3. Save to Disk
-            guard let localURL = localFileURL(for: song.id) else { return }
-            try data.write(to: localURL)
-            
-            logger.info("✅ Download complete: \(song.title)")
-            
-            // 4. Optionally download Cover Art
+        // 1. Skip if exists
+        if fileManager.fileExists(atPath: url.path) {
+            // Even if song exists, ensure cover exists
             if let coverId = song.album?.coverArtId {
                 await downloadCover(coverId: coverId)
             }
-            
-        } catch {
-            logger.error("❌ Download failed for \(song.title): \(error)")
+            return
         }
-    }
-    
-    private func downloadCover(coverId: String) async {
-        // ✅ FIX: coverArtURL is nonisolated, no await needed
-        guard let url = client.coverArtURL(id: coverId, size: 600) else { return }
-        guard let dest = localCoverURL(for: coverId) else { return }
         
-        if fileManager.fileExists(atPath: dest.path(percentEncoded: false)) { return }
+        // 2. Mark as Downloading
+        activeDownloads.insert(song.id) // Track individual song
+        defer { activeDownloads.remove(song.id) }
         
+        // 3. Download Audio
+        logger.info("⬇️ Downloading song: \(song.title)")
         do {
-            let data = try await client.downloadData(from: url)
-            try data.write(to: dest)
+            if let streamURL = client.streamURL(for: song.id),
+               let data = try? await client.downloadData(from: streamURL) {
+                try data.write(to: url)
+                logger.info("✅ Saved song: \(song.title)")
+            }
         } catch {
-            logger.warning("Failed to download cover \(coverId)")
-        }
-    }
-    
-    // MARK: - AssetProvider Conformance
-    
-    func asset(for songId: String) async -> AVAsset? {
-        // 1. Check disk
-        if let localURL = localFileURL(for: songId),
-           fileManager.fileExists(atPath: localURL.path(percentEncoded: false)) {
-            // Use AVURLAsset for iOS 18+ compliance
-            return AVURLAsset(url: localURL)
+            logger.error("❌ Failed to download song: \(error)")
         }
         
-        // 2. Fallback to Stream
-        // ✅ FIX: streamURL is nonisolated, no await needed
-        guard let url = client.streamURL(for: songId) else { return nil }
-        return AVURLAsset(url: url)
+        // 4. Download Cover Art (Critical for Offline)
+        if let coverId = song.album?.coverArtId {
+            await downloadCover(coverId: coverId)
+        }
     }
     
-    // MARK: - Helpers
-    
-    func localFileURL(for songId: String) -> URL? {
-        let filename = "\(songId).m4a"
-        return downloadsDirectory.appendingPathComponent(filename)
+    func downloadCover(coverId: String) async {
+        let url = localCoverURL(for: coverId)
+        if fileManager.fileExists(atPath: url.path) { return }
+        
+        logger.info("🖼️ Downloading cover: \(coverId)")
+        
+        // Attempt download
+        if let remoteURL = client.coverArtURL(id: coverId, size: 600),
+           let data = try? await client.downloadData(from: remoteURL) {
+            try? data.write(to: url)
+            logger.info("✅ Saved cover art")
+        }
     }
     
-    func localCoverURL(for coverId: String) -> URL? {
-        let filename = "cover_\(coverId).jpg"
-        return downloadsDirectory.appendingPathComponent(filename)
+    func deleteDownload(song: Loop.Song) {
+        if let url = localFileURL(for: song.id) {
+            try? fileManager.removeItem(at: url)
+            logger.info("🗑️ Deleted song: \(song.title)")
+        }
     }
     
-    func isPinned(songId: String) -> Bool {
-        guard let url = localFileURL(for: songId) else { return false }
-        return fileManager.fileExists(atPath: url.path(percentEncoded: false))
+    // Helper for Album Download
+    func downloadAlbum(albumId: String, songs: [Loop.Song]) async {
+        activeDownloads.insert(albumId) // Track Album Level
+        
+        for song in songs {
+            await download(song: song)
+        }
+        
+        activeDownloads.remove(albumId)
     }
 }
