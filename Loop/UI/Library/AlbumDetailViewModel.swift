@@ -2,7 +2,7 @@
 //  AlbumDetailViewModel.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  FIXED: Uses environment objects, async operations
 //
 
 import SwiftUI
@@ -17,54 +17,59 @@ final class AlbumDetailViewModel {
         case downloaded
     }
     
-    var album: Loop.Album?
-    var songs: [Loop.Song] = []
+    var album: AlbumDTO?
+    var songs: [SongDTO] = []
     var isLoading = false
     var downloadState: DownloadState = .idle
     
     private let albumId: String
-    private let repo: MusicRepository
-    private let syncManager: SyncManager // ✅ Added
-    private let downloads: DownloadManager
-    private let player: AudioEngine
+    private let music: MusicEnvironment
+    private let playback: PlaybackEnvironment
+    private let downloads: DownloadEnvironment
     
-    // ✅ Updated Init
-    init(albumId: String, repo: MusicRepository, syncManager: SyncManager, downloads: DownloadManager, player: AudioEngine) {
+    init(albumId: String, music: MusicEnvironment, playback: PlaybackEnvironment, downloads: DownloadEnvironment) {
         self.albumId = albumId
-        self.repo = repo
-        self.syncManager = syncManager
+        self.music = music
+        self.playback = playback
         self.downloads = downloads
-        self.player = player
     }
     
     func load() async {
-        self.album = repo.getLocalAlbum(id: albumId)
-        self.songs = repo.getLocalSongs(for: albumId)
-        updateDownloadState()
-        
-        isLoading = true
-        // ✅ Fix: Call syncManager instead of repo
-        try? await syncManager.syncAlbumDetails(albumId: albumId)
-        
-        // Reload local data after sync
-        self.album = repo.getLocalAlbum(id: albumId)
-        self.songs = repo.getLocalSongs(for: albumId)
-        isLoading = false
-        updateDownloadState()
+        do {
+            // Load from local DB first
+            self.album = try await music.getAlbum(id: albumId)
+            self.songs = try await music.getSongs(for: albumId)
+            updateDownloadState()
+            
+            // Sync from server
+            isLoading = true
+            try await music.syncAlbumDetails(albumId: albumId)
+            
+            // Reload after sync
+            self.album = try await music.getAlbum(id: albumId)
+            self.songs = try await music.getSongs(for: albumId)
+            isLoading = false
+            updateDownloadState()
+            
+        } catch {
+            isLoading = false
+            print("Error loading album: \(error)")
+        }
     }
     
-    func toggleDownload() {
+    func toggleDownload() async {
         switch downloadState {
         case .downloaded:
-            for song in songs { downloads.deleteDownload(song: song) }
+            // Delete all songs
+            for song in songs {
+                downloads.deleteDownload(songId: song.id)
+            }
             updateDownloadState()
             
         case .idle:
             downloadState = .downloading
-            Task {
-                await downloads.downloadAlbum(albumId: albumId, songs: songs)
-                updateDownloadState()
-            }
+            await downloads.downloadAlbum(albumId: albumId, songs: songs)
+            updateDownloadState()
             
         case .downloading:
             break
@@ -81,10 +86,8 @@ final class AlbumDetailViewModel {
         }
     }
     
-    func play(song: Loop.Song) {
+    func play(song: SongDTO) async {
         let songIds = songs.map { $0.id }
-        Task {
-            await player.setupPlayer(with: song.id, queue: songIds)
-        }
+        await playback.setupPlayer(with: song.id, queue: songIds)
     }
 }

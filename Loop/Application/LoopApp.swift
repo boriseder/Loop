@@ -2,7 +2,7 @@
 //  LoopApp.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  FIXED: Uses granular environment objects
 //
 
 import SwiftUI
@@ -15,18 +15,20 @@ struct LoopApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                // ✅ ROOT SWITCHER
-                if container.authService.isAuthenticated {
+                if container.auth.isAuthenticated {
                     AuthenticatedRoot()
                 } else {
                     LoginView()
                 }
             }
-            .environment(container)
+            .environment(container.auth)
+            .environment(container.music)
+            .environment(container.playback)
+            .environment(container.downloads)
+            .environment(container.router)
         }
     }
     
-    // Separated the Authenticated flow to keep body clean
     @ViewBuilder
     private func AuthenticatedRoot() -> some View {
         @Bindable var router = container.router
@@ -38,7 +40,7 @@ struct LoopApp: App {
                 }
         }
         .overlay(alignment: .bottom) {
-            if container.audio.currentSongId != nil {
+            if container.playback.currentSongId != nil {
                 MiniPlayerView()
                     .padding(.bottom, 20)
                     .padding(.horizontal, 12)

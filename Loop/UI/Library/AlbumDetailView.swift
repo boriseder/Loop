@@ -2,14 +2,18 @@
 //  AlbumDetailView.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  FIXED: Uses environment objects, async operations
 //
 
 import SwiftUI
 
 struct AlbumDetailView: View {
     let albumId: String
-    @Environment(AppContainer.self) private var container
+    
+    @Environment(MusicEnvironment.self) private var music
+    @Environment(PlaybackEnvironment.self) private var playback
+    @Environment(DownloadEnvironment.self) private var downloads
+    
     @State private var viewModel: AlbumDetailViewModel?
     
     var body: some View {
@@ -19,7 +23,7 @@ struct AlbumDetailView: View {
                     
                     // MARK: - Header
                     VStack(spacing: 12) {
-                        CoverArtView(coverArtId: vm.album?.coverArtId, size: 200)
+                        CoverImageView(coverId: vm.album?.coverArtId, size: 200)
                             .cornerRadius(12)
                             .shadow(radius: 8)
                         
@@ -28,7 +32,7 @@ struct AlbumDetailView: View {
                                 .font(.title2.bold())
                                 .multilineTextAlignment(.center)
                             
-                            Text(vm.album?.artist?.name ?? "Unknown Artist")
+                            Text(vm.album?.artistName ?? "Unknown Artist")
                                 .font(.headline)
                                 .foregroundStyle(.secondary)
                             
@@ -40,7 +44,11 @@ struct AlbumDetailView: View {
                         // Action Buttons
                         HStack(spacing: 20) {
                             Button {
-                                if let first = vm.songs.first { vm.play(song: first) }
+                                if let first = vm.songs.first {
+                                    Task {
+                                        await vm.play(song: first)
+                                    }
+                                }
                             } label: {
                                 Label("Play", systemImage: "play.fill")
                                     .font(.headline)
@@ -53,7 +61,9 @@ struct AlbumDetailView: View {
                             
                             // Download Button
                             Button {
-                                vm.toggleDownload()
+                                Task {
+                                    await vm.toggleDownload()
+                                }
                             } label: {
                                 ZStack {
                                     Circle()
@@ -88,7 +98,9 @@ struct AlbumDetailView: View {
                     LazyVStack(spacing: 0) {
                         ForEach(vm.songs) { song in
                             Button {
-                                vm.play(song: song)
+                                Task {
+                                    await vm.play(song: song)
+                                }
                             } label: {
                                 HStack(spacing: 16) {
                                     Text(song.trackNumber > 0 ? "\(song.trackNumber)" : "-")
@@ -98,14 +110,14 @@ struct AlbumDetailView: View {
                                     
                                     VStack(alignment: .leading) {
                                         Text(song.title).font(.body).lineLimit(1)
-                                        if let artist = song.artist {
-                                            Text(artist.name).font(.caption).foregroundStyle(.secondary)
+                                        if let artist = song.artistName {
+                                            Text(artist).font(.caption).foregroundStyle(.secondary)
                                         }
                                     }
                                     
                                     Spacer()
                                     
-                                    if container.downloads.isPinned(songId: song.id) {
+                                    if downloads.isPinned(songId: song.id) {
                                         Image(systemName: "arrow.down.circle.fill")
                                             .font(.caption)
                                             .foregroundStyle(Color.accentColor)
@@ -133,13 +145,11 @@ struct AlbumDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if viewModel == nil {
-                // ✅ FIX: Inject syncManager here
                 viewModel = AlbumDetailViewModel(
                     albumId: albumId,
-                    repo: container.repo,
-                    syncManager: container.syncManager,
-                    downloads: container.downloads,
-                    player: container.audio
+                    music: music,
+                    playback: playback,
+                    downloads: downloads
                 )
             }
         }
@@ -152,5 +162,45 @@ struct AlbumDetailView: View {
         let minutes = Int(seconds) / 60
         let remainingSeconds = Int(seconds) % 60
         return String(format: "%d:%02d", minutes, remainingSeconds)
+    }
+}
+
+// MARK: - Cover Image Component
+
+struct CoverImageView: View {
+    let coverId: String?
+    let size: Int
+    
+    @Environment(MusicEnvironment.self) private var music
+    @State private var image: UIImage?
+    
+    var body: some View {
+        let safeSize = CGFloat(max(50, size))
+        
+        Group {
+            if let image = image {
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                placeholder(size: safeSize)
+            }
+        }
+        .frame(width: safeSize, height: safeSize)
+        .background(Color.secondary.opacity(0.1))
+        .task(id: coverId) {
+            if let id = coverId {
+                image = await music.getCoverImage(for: id, size: size * 2)
+            }
+        }
+    }
+    
+    private func placeholder(size: CGFloat) -> some View {
+        ZStack {
+            Color.secondary.opacity(0.1)
+            Image(systemName: "music.note")
+                .font(.system(size: size * 0.4))
+                .foregroundStyle(.secondary)
+        }
     }
 }

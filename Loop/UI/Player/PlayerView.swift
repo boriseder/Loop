@@ -2,22 +2,22 @@
 //  PlayerView.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  FIXED: Uses PlaybackEnvironment and MusicEnvironment
 //
 
 import SwiftUI
 import MediaPlayer
 
 struct PlayerView: View {
-    @Environment(AppContainer.self) private var container
+    @Environment(PlaybackEnvironment.self) private var playback
+    @Environment(MusicEnvironment.self) private var music
     @Binding var isPresented: Bool
     
     @State private var isDraggingSlider = false
     @State private var dragProgress: Double = 0.0
+    @State private var coverImage: UIImage?
     
     var body: some View {
-        let audio = container.audio
-        
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 
@@ -29,26 +29,38 @@ struct PlayerView: View {
                     .padding(.bottom, 30)
                 
                 // Cover Art
-                // ✅ FIX: Safe geometry calculation
                 let minDimension = min(geometry.size.width, geometry.size.height)
-                let artSize = minDimension * 0.8 // 80% of width
+                let artSize = minDimension * 0.8
                 
-                CoverArtView(coverArtId: audio.currentCoverId, size: Int(artSize * 2))
-                    .frame(width: artSize, height: artSize)
-                    .cornerRadius(20)
-                    .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
-                    .padding(.bottom, 40)
+                Group {
+                    if let image = coverImage {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } else {
+                        ZStack {
+                            Color.secondary.opacity(0.1)
+                            Image(systemName: "music.note")
+                                .font(.system(size: artSize * 0.3))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(width: artSize, height: artSize)
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
+                .padding(.bottom, 40)
                 
                 // Metadata
                 VStack(spacing: 8) {
-                    Text(audio.currentTitle)
+                    Text(playback.currentTitle)
                         .font(.title2)
                         .fontWeight(.bold)
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     
-                    Text(audio.currentArtist)
+                    Text(playback.currentArtist)
                         .font(.title3)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -61,24 +73,24 @@ struct PlayerView: View {
                 // Scrubber
                 VStack(spacing: 8) {
                     Slider(value: Binding(
-                        get: { isDraggingSlider ? dragProgress : audio.progress },
+                        get: { isDraggingSlider ? dragProgress : playback.progress },
                         set: { newVal in
                             isDraggingSlider = true
                             dragProgress = newVal
                         }
                     ), in: 0...1) { editing in
                         if !editing {
-                            let targetTime = dragProgress * audio.duration
-                            container.audio.seek(to: targetTime)
+                            let targetTime = dragProgress * playback.duration
+                            playback.seek(to: targetTime)
                             isDraggingSlider = false
                         }
                     }
                     .tint(.primary)
                     
                     HStack {
-                        Text(formatTime(isDraggingSlider ? dragProgress * audio.duration : audio.progress * audio.duration))
+                        Text(formatTime(isDraggingSlider ? dragProgress * playback.duration : playback.progress * playback.duration))
                         Spacer()
-                        Text(formatTime(audio.duration))
+                        Text(formatTime(playback.duration))
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -90,25 +102,25 @@ struct PlayerView: View {
                 // Controls
                 HStack(spacing: 50) {
                     Button {
-                        container.audio.seek(to: 0)
+                        playback.seek(to: 0)
                     } label: {
                         Image(systemName: "backward.fill")
                             .font(.system(size: 35))
                     }
                     
                     Button {
-                        if audio.isPlaying {
-                            container.audio.pause()
+                        if playback.isPlaying {
+                            playback.pause()
                         } else {
-                            container.audio.play()
+                            playback.play()
                         }
                     } label: {
-                        Image(systemName: audio.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        Image(systemName: playback.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                             .font(.system(size: 80))
                     }
                     
                     Button {
-                        container.audio.skipToNext()
+                        playback.skipToNext()
                     } label: {
                         Image(systemName: "forward.fill")
                             .font(.system(size: 35))
@@ -120,6 +132,11 @@ struct PlayerView: View {
             .frame(width: geometry.size.width)
         }
         .background(Material.regular)
+        .task(id: playback.currentCoverId) {
+            if let coverId = playback.currentCoverId {
+                coverImage = await music.getCoverImage(for: coverId, size: 600)
+            }
+        }
     }
     
     private func formatTime(_ time: Double) -> String {

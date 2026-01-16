@@ -2,14 +2,15 @@
 //  ArtistDetailView.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  FIXED: Uses MusicEnvironment, async operations
 //
 
 import SwiftUI
 
 struct ArtistDetailView: View {
     let artistId: String
-    @Environment(AppContainer.self) private var container
+    
+    @Environment(MusicEnvironment.self) private var music
     @State private var viewModel: ArtistDetailViewModel?
     
     var body: some View {
@@ -29,7 +30,6 @@ struct ArtistDetailView: View {
                                 .fontWeight(.bold)
                                 .foregroundStyle(.secondary)
                             
-                            // ✅ FIX: Access name via the optional artist object
                             Text(vm.artist?.name ?? "Loading...")
                                 .font(.title)
                                 .fontWeight(.bold)
@@ -53,7 +53,7 @@ struct ArtistDetailView: View {
                             ForEach(vm.albums, id: \.id) { album in
                                 NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
                                     VStack(alignment: .leading, spacing: 8) {
-                                        CoverArtView(coverArtId: album.coverArtId, size: 150)
+                                        CoverImageView(coverId: album.coverArtId, size: 150)
                                             .cornerRadius(12)
                                             .shadow(radius: 4)
                                         
@@ -63,9 +63,11 @@ struct ArtistDetailView: View {
                                                 .lineLimit(1)
                                                 .foregroundStyle(.primary)
                                             
-                                            Text(String(album.year ?? 0))
-                                                .font(.caption)
-                                                .foregroundStyle(.secondary)
+                                            if let year = album.year {
+                                                Text(String(year))
+                                                    .font(.caption)
+                                                    .foregroundStyle(.secondary)
+                                            }
                                         }
                                     }
                                 }
@@ -79,11 +81,11 @@ struct ArtistDetailView: View {
                 ProgressView().padding(.top, 50)
             }
         }
-        .navigationTitle("") // Hide default title to use custom header
+        .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if viewModel == nil {
-                viewModel = ArtistDetailViewModel(artistId: artistId, repo: container.repo)
+                viewModel = ArtistDetailViewModel(artistId: artistId, music: music)
             }
         }
         .task {

@@ -2,14 +2,14 @@
 //  SubsonicModels.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  FIXED: Added Sendable conformance for Swift 6 strict concurrency
 //
 
 import Foundation
 
 // MARK: - Root Response Wrappers
 
-struct SubsonicResponse: Decodable {
+struct SubsonicResponse: Decodable, Sendable {
     let subsonicResponse: SubsonicWrapper
     
     enum CodingKeys: String, CodingKey {
@@ -17,7 +17,7 @@ struct SubsonicResponse: Decodable {
     }
 }
 
-struct SubsonicWrapper: Decodable {
+struct SubsonicWrapper: Decodable, Sendable {
     let status: String
     let version: String
     let albumList2: RemoteAlbumList?
@@ -25,61 +25,60 @@ struct SubsonicWrapper: Decodable {
     let artist: RemoteArtist?
     let genres: RemoteGenres?
     let song: RemoteSong?
-    let searchResult3: RemoteSearchResult? // ✅ Added for Search
+    let searchResult3: RemoteSearchResult?
     let error: RemoteError?
 }
 
-struct RemoteError: Decodable {
+struct RemoteError: Decodable, Sendable {
     let code: Int
     let message: String
 }
 
 // MARK: - Specific Response Types (Helpers for generics)
 
-struct SubsonicPingResponse: Decodable {
+struct SubsonicPingResponse: Decodable, Sendable {
     let subsonicResponse: SubsonicWrapper
     enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
 }
 
-struct SubsonicGetAlbumResponse: Decodable {
+struct SubsonicGetAlbumResponse: Decodable, Sendable {
     let subsonicResponse: SubsonicWrapper
     enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
 }
 
-struct SubsonicGetArtistResponse: Decodable {
+struct SubsonicGetArtistResponse: Decodable, Sendable {
     let subsonicResponse: SubsonicWrapper
     enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
 }
 
-struct SubsonicGenresResponse: Decodable {
+struct SubsonicGenresResponse: Decodable, Sendable {
     let subsonicResponse: SubsonicWrapper
     enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
 }
 
-struct SubsonicGetSongResponse: Decodable {
+struct SubsonicGetSongResponse: Decodable, Sendable {
     let subsonicResponse: SubsonicWrapper
     enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
 }
 
-// ✅ Added Search Response
-struct SubsonicSearchResponse: Decodable {
+struct SubsonicSearchResponse: Decodable, Sendable {
     let subsonicResponse: SubsonicWrapper
     enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
 }
 
 // MARK: - Data Entities
 
-struct RemoteAlbumList: Decodable {
+struct RemoteAlbumList: Decodable, Sendable {
     let album: [RemoteAlbum]?
 }
 
-struct RemoteSearchResult: Decodable {
+struct RemoteSearchResult: Decodable, Sendable {
     let song: [RemoteSong]?
     let album: [RemoteAlbum]?
     let artist: [RemoteArtist]?
 }
 
-struct RemoteAlbum: Decodable {
+struct RemoteAlbum: Decodable, Sendable {
     let id: String
     let name: String
     let artist: String
@@ -91,7 +90,7 @@ struct RemoteAlbum: Decodable {
     let songCount: Int?
 }
 
-struct RemoteAlbumDetail: Decodable {
+struct RemoteAlbumDetail: Decodable, Sendable {
     let id: String
     let name: String
     let artist: String
@@ -102,7 +101,7 @@ struct RemoteAlbumDetail: Decodable {
     let song: [RemoteSong]?
 }
 
-struct RemoteSong: Decodable {
+struct RemoteSong: Decodable, Sendable {
     let id: String
     let title: String
     let album: String?
@@ -117,7 +116,7 @@ struct RemoteSong: Decodable {
     let size: Int64?
 }
 
-struct RemoteArtist: Decodable {
+struct RemoteArtist: Decodable, Sendable {
     let id: String
     let name: String
     let coverArt: String?
@@ -125,11 +124,11 @@ struct RemoteArtist: Decodable {
     let album: [RemoteAlbum]?
 }
 
-struct RemoteGenres: Decodable {
+struct RemoteGenres: Decodable, Sendable {
     let genre: [RemoteGenre]?
 }
 
-struct RemoteGenre: Decodable {
+struct RemoteGenre: Decodable, Sendable {
     let value: String
     let songCount: Int
     let albumCount: Int

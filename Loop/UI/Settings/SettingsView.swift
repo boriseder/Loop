@@ -2,13 +2,14 @@
 //  SettingsView.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  FIXED: Uses AuthEnvironment and MusicEnvironment
 //
 
 import SwiftUI
 
 struct SettingsView: View {
-    @Environment(AppContainer.self) private var container
+    @Environment(AuthEnvironment.self) private var auth
+    @Environment(MusicEnvironment.self) private var music
     @Environment(\.dismiss) private var dismiss
     
     @State private var cacheSize: String = "Calculating..."
@@ -18,13 +19,11 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 Section("Account") {
-                    // Note: CredentialStorage removed in refactor, consider using a VM or checking AuthService state
-                    LabeledContent("Status", value: container.authService.isAuthenticated ? "Logged In" : "Not Logged In")
+                    LabeledContent("Status", value: auth.isAuthenticated ? "Logged In" : "Not Logged In")
                     
                     Button("Logout", role: .destructive) {
-                        // ✅ FIX: Use authService to logout
                         Task {
-                            await container.authService.logout()
+                            await auth.logout()
                             dismiss()
                         }
                     }
@@ -37,7 +36,7 @@ struct SettingsView: View {
                         isClearing = true
                         Task {
                             await clearImageCache()
-                            calculateCacheSize()
+                            await calculateCacheSize()
                             isClearing = false
                         }
                     }
@@ -54,38 +53,33 @@ struct SettingsView: View {
                     Button("Done") { dismiss() }
                 }
             }
-            .onAppear {
-                calculateCacheSize()
+            .task {
+                await calculateCacheSize()
             }
         }
     }
     
     // MARK: - Helpers
     
-    private func calculateCacheSize() {
-        Task.detached(priority: .background) {
-            let fileManager = FileManager.default
-            let urls = fileManager.urls(for: .documentDirectory, in: .userDomainMask)
-            guard let docDir = urls.first else { return }
-            let coversDir = docDir.appendingPathComponent("Covers")
-            
-            var totalSize: Int64 = 0
-            
-            if let files = try? fileManager.contentsOfDirectory(at: coversDir, includingPropertiesForKeys: [.fileSizeKey]) {
-                for fileURL in files {
-                    if let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey]),
-                       let size = resourceValues.fileSize {
-                        totalSize += Int64(size)
-                    }
+    private func calculateCacheSize() async {
+        let fileManager = FileManager.default
+        let urls = fileManager.urls(for: .documentDirectory, in: .userDomainMask)
+        guard let docDir = urls.first else { return }
+        let coversDir = docDir.appendingPathComponent("Covers")
+        
+        var totalSize: Int64 = 0
+        
+        if let files = try? fileManager.contentsOfDirectory(at: coversDir, includingPropertiesForKeys: [.fileSizeKey]) {
+            for fileURL in files {
+                if let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey]),
+                   let size = resourceValues.fileSize {
+                    totalSize += Int64(size)
                 }
             }
-            
-            let formattedSize = ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file)
-            
-            await MainActor.run {
-                self.cacheSize = formattedSize
-            }
         }
+        
+        let formattedSize = ByteCountFormatter.string(fromByteCount: totalSize, countStyle: .file)
+        self.cacheSize = formattedSize
     }
     
     private func clearImageCache() async {

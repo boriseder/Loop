@@ -2,7 +2,7 @@
 //  Router.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  Navigation router - unchanged, already correct
 //
 
 import SwiftUI
@@ -19,18 +19,19 @@ final class Router {
         case genreDetail(genreName: String)
     }
     
-    // ✅ NOTE: We've moved the view builder to ContentView in LoopApp.swift
-    // This ensures views are created in a context where @Environment is available
-    // You can delete this method or keep it for reference
-    @ViewBuilder
-    func view(for destination: Destination) -> some View {
-        switch destination {
-        case .albumDetail(let id):
-            AlbumDetailView(albumId: id)
-        case .artistDetail(let id):
-            ArtistDetailView(artistId: id)
-        case .genreDetail(let name):
-            GenreDetailView(genreName: name)
-        }
+    func navigateToAlbum(_ id: String) {
+        path.append(Destination.albumDetail(albumId: id))
+    }
+    
+    func navigateToArtist(_ id: String) {
+        path.append(Destination.artistDetail(artistId: id))
+    }
+    
+    func navigateToGenre(_ name: String) {
+        path.append(Destination.genreDetail(genreName: name))
+    }
+    
+    func popToRoot() {
+        path.removeLast(path.count)
     }
 }

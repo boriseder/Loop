@@ -2,13 +2,13 @@
 //  LoginView.swift
 //  Loop
 //
-//  With proper async/await and error handling
+//  FIXED: Uses AuthEnvironment
 //
 
 import SwiftUI
 
 struct LoginView: View {
-    @Environment(AppContainer.self) private var container
+    @Environment(AuthEnvironment.self) private var auth
     
     @State private var serverURL = ""
     @State private var username = ""
@@ -56,7 +56,7 @@ struct LoginView: View {
             }
             .padding(.horizontal)
             
-            if let error = container.authService.authError {
+            if let error = auth.authError {
                 Text(error)
                     .foregroundStyle(.red)
                     .font(.caption)
@@ -104,7 +104,7 @@ struct LoginView: View {
             password: password
         )
         
-        await container.authService.login(credentials: credentials)
+        await auth.login(credentials: credentials)
         
         isConnecting = false
     }

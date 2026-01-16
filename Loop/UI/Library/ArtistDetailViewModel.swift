@@ -2,7 +2,7 @@
 //  ArtistDetailViewModel.swift
 //  Loop
 //
-//  Fixed: Added missing 'isLoading' property
+//  FIXED: Uses MusicEnvironment, async operations
 //
 
 import Foundation
@@ -11,28 +11,26 @@ import Observation
 @Observable @MainActor
 final class ArtistDetailViewModel {
     
-    var artist: Loop.Artist?
-    var albums: [Loop.Album] = []
-    var isLoading = false // ✅ ADDED
+    var artist: ArtistDTO?
+    var albums: [AlbumDTO] = []
+    var isLoading = false
     
     private let artistId: String
-    private let repo: MusicRepository
+    private let music: MusicEnvironment
     
-    init(artistId: String, repo: MusicRepository) {
+    init(artistId: String, music: MusicEnvironment) {
         self.artistId = artistId
-        self.repo = repo
+        self.music = music
     }
     
     func load() async {
-        isLoading = true // ✅ Start loading
+        isLoading = true
         do {
-            // Fetch artist and albums synchronously from local repo
-            let result = try repo.getArtistWithAlbums(id: artistId)
-            self.artist = result.artist
-            self.albums = result.albums
+            self.artist = try await music.getArtist(id: artistId)
+            self.albums = try await music.getAlbums(forArtist: artistId)
         } catch {
             print("Error loading artist: \(error)")
         }
-        isLoading = false // ✅ Stop loading
+        isLoading = false
     }
 }

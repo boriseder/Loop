@@ -2,16 +2,16 @@
 //  LibraryView.swift
 //  Loop
 //
-//  Fixed: Missing argument labels in NavigationLink destinations
+//  FIXED: Uses MusicEnvironment, supports infinite scroll
 //
 
 import SwiftUI
 
 struct LibraryView: View {
-    @Environment(AppContainer.self) private var container
+    @Environment(MusicEnvironment.self) private var music
+    @Environment(Router.self) private var router
     @State private var viewModel: LibraryViewModel?
     
-    // Grid configuration
     private let columns = [
         GridItem(.adaptive(minimum: 150, maximum: 180), spacing: 16)
     ]
@@ -26,14 +26,11 @@ struct LibraryView: View {
         }
         .onAppear {
             if viewModel == nil {
-                viewModel = LibraryViewModel(
-                    repo: container.repo,
-                    syncManager: container.syncManager
-                )
+                viewModel = LibraryViewModel(music: music)
+                Task {
+                    await viewModel?.loadInitialData()
+                }
             }
-        }
-        .task {
-            await viewModel?.loadInitialData()
         }
     }
     
@@ -53,7 +50,7 @@ struct LibraryView: View {
             
             // Content
             ScrollView {
-                if vm.isLoading {
+                if vm.isLoading && vm.recentAlbums.isEmpty && vm.artists.isEmpty && vm.genres.isEmpty {
                     ProgressView()
                         .padding(.top, 40)
                 } else {
@@ -66,6 +63,15 @@ struct LibraryView: View {
             }
         }
         .navigationTitle("Library")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink {
+                    SettingsView()
+                } label: {
+                    Image(systemName: "gear")
+                }
+            }
+        }
         .overlay(alignment: .bottom) {
             if let msg = vm.statusMessage {
                 Text(msg)
@@ -100,9 +106,15 @@ struct LibraryView: View {
         case .recent:
             LazyVGrid(columns: columns, spacing: 20) {
                 ForEach(vm.recentAlbums) { album in
-                    // ✅ FIX: Added 'albumId:' argument label
                     NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
                         AlbumCell(album: album)
+                    }
+                    .buttonStyle(.plain)
+                    .task {
+                        // Trigger load more when near the end
+                        if album.id == vm.recentAlbums.last?.id {
+                            await vm.loadMore()
+                        }
                     }
                 }
             }
@@ -110,7 +122,6 @@ struct LibraryView: View {
         case .artists:
             LazyVStack(spacing: 0) {
                 ForEach(vm.artists) { artist in
-                    // ✅ FIX: Added 'artistId:' argument label
                     NavigationLink(value: Router.Destination.artistDetail(artistId: artist.id)) {
                         HStack {
                             Text(artist.name)
@@ -124,14 +135,20 @@ struct LibraryView: View {
                         .background(Color.secondary.opacity(0.05))
                         .cornerRadius(10)
                     }
+                    .buttonStyle(.plain)
                     .padding(.bottom, 8)
+                    .task {
+                        // Trigger load more when near the end
+                        if artist.id == vm.artists.last?.id {
+                            await vm.loadMore()
+                        }
+                    }
                 }
             }
             
         case .genres:
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)]) {
                 ForEach(vm.genres) { genre in
-                    // ✅ FIX: Added 'genreName:' argument label
                     NavigationLink(value: Router.Destination.genreDetail(genreName: genre.name)) {
                         VStack {
                             Text(genre.name)
@@ -145,30 +162,59 @@ struct LibraryView: View {
                         .background(Color.secondary.opacity(0.1))
                         .cornerRadius(12)
                     }
+                    .buttonStyle(.plain)
                 }
             }
         }
     }
 }
 
-// Helper Cell
+// MARK: - Album Cell Component
+
 struct AlbumCell: View {
-    let album: Loop.Album
+    let album: AlbumDTO
+    @Environment(MusicEnvironment.self) private var music
+    @State private var coverImage: UIImage?
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            CoverArtView(coverArtId: album.coverArtId, size: 180)
-                .aspectRatio(1, contentMode: .fit)
-                .cornerRadius(12)
+            Group {
+                if let image = coverImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    placeholderView
+                }
+            }
+            .frame(width: 180, height: 180)
+            .background(Color.secondary.opacity(0.1))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .shadow(radius: 4)
             
             Text(album.title)
                 .font(.headline)
                 .lineLimit(1)
+                .foregroundStyle(.primary)
             
-            Text(album.artist?.name ?? "Unknown")
+            Text(album.artistName ?? "Unknown")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+        }
+        .task(id: album.coverArtId) {
+            if let coverId = album.coverArtId {
+                coverImage = await music.getCoverImage(for: coverId, size: 360)
+            }
+        }
+    }
+    
+    private var placeholderView: some View {
+        ZStack {
+            Color.secondary.opacity(0.1)
+            Image(systemName: "music.note")
+                .font(.system(size: 60))
+                .foregroundStyle(.secondary)
         }
     }
 }
