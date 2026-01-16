@@ -2,7 +2,7 @@
 //  AppContainer.swift
 //  Loop
 //
-//  FIXED: Granular environment objects instead of god object
+//  FIXED: Added sync progress tracking
 //
 
 import Foundation
@@ -85,12 +85,22 @@ final class MusicEnvironment {
     private let sync: SyncManager
     private let coverCache: CoverArtCache
     
+    // ✅ NEW: Sync progress tracking
+    private(set) var syncProgress: SyncProgress = SyncProgress(phase: .idle)
     private(set) var isSyncing = false
     
     init(repo: MusicRepository, sync: SyncManager, coverCache: CoverArtCache) {
         self.repo = repo
         self.sync = sync
         self.coverCache = coverCache
+        
+        // ✅ Setup progress callback - Fixed actor isolation
+        Task { @MainActor in
+            await sync.setProgressCallback { [weak self] progress in
+                self?.syncProgress = progress
+                self?.isSyncing = progress.isActive
+            }
+        }
     }
     
     // Read operations
@@ -136,9 +146,11 @@ final class MusicEnvironment {
     
     // Sync operations
     func performSync() async throws {
-        isSyncing = true
-        defer { isSyncing = false }
         try await sync.performSmartSync()
+    }
+    
+    func cancelSync() async {
+        await sync.cancelSync()
     }
     
     func syncAlbumDetails(albumId: String) async throws {
@@ -160,6 +172,10 @@ final class PlaybackEnvironment {
     var duration: Double { engine.duration }
     var errorMessage: String? { engine.errorMessage }
     
+    // ✅ NEW: Enhanced controls
+    var isShuffled: Bool { engine.isShuffled }
+    var repeatMode: RepeatMode { engine.repeatMode }
+    
     init(engine: AudioEngine) {
         self.engine = engine
     }
@@ -178,6 +194,21 @@ final class PlaybackEnvironment {
     
     func skipToNext() {
         engine.skipToNext()
+    }
+    
+    // ✅ NEW: Previous track
+    func skipToPrevious() {
+        engine.skipToPrevious()
+    }
+    
+    // ✅ NEW: Shuffle toggle
+    func toggleShuffle() {
+        engine.toggleShuffle()
+    }
+    
+    // ✅ NEW: Repeat toggle
+    func toggleRepeat() {
+        engine.toggleRepeat()
     }
     
     func setupPlayer(with songId: String, queue: [String], autoPlay: Bool = true) async {
@@ -208,8 +239,6 @@ final class DownloadEnvironment {
     }
     
     func download(song: SongDTO) async {
-        // Convert DTO back to Song for download
-        // In real implementation, DownloadManager should accept DTO
         await manager.downloadSong(id: song.id, path: song.path, coverId: song.coverArtId)
     }
     

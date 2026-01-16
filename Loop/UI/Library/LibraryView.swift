@@ -2,7 +2,7 @@
 //  LibraryView.swift
 //  Loop
 //
-//  FIXED: Uses MusicEnvironment, supports infinite scroll
+//  FIXED: Added search button
 //
 
 import SwiftUI
@@ -11,6 +11,7 @@ struct LibraryView: View {
     @Environment(MusicEnvironment.self) private var music
     @Environment(Router.self) private var router
     @State private var viewModel: LibraryViewModel?
+    @State private var showSearch = false
     
     private let columns = [
         GridItem(.adaptive(minimum: 150, maximum: 180), spacing: 16)
@@ -32,6 +33,9 @@ struct LibraryView: View {
                 }
             }
         }
+        .sheet(isPresented: $showSearch) {
+            SearchView()
+        }
     }
     
     @ViewBuilder
@@ -50,9 +54,21 @@ struct LibraryView: View {
             
             // Content
             ScrollView {
+                // ✅ NEW: Show skeleton loaders during initial load
                 if vm.isLoading && vm.recentAlbums.isEmpty && vm.artists.isEmpty && vm.genres.isEmpty {
-                    ProgressView()
-                        .padding(.top, 40)
+                    if vm.scope == .recent {
+                        AlbumGridSkeleton()
+                    } else if vm.scope == .artists || vm.scope == .genres {
+                        ListSkeletonView()
+                    }
+                } else if !vm.isLoading && vm.recentAlbums.isEmpty && vm.artists.isEmpty && vm.genres.isEmpty {
+                    // ✅ NEW: Empty state
+                    ContentUnavailableView(
+                        "No Music Yet",
+                        systemImage: "music.note.list",
+                        description: Text("Pull to refresh to sync your library from the server")
+                    )
+                    .padding(.top, 60)
                 } else {
                     contentGrid(vm)
                         .padding()
@@ -64,6 +80,15 @@ struct LibraryView: View {
         }
         .navigationTitle("Library")
         .toolbar {
+            // ✅ NEW: Search button
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    showSearch = true
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                }
+            }
+            
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
                     SettingsView()
@@ -105,13 +130,13 @@ struct LibraryView: View {
         switch vm.scope {
         case .recent:
             LazyVGrid(columns: columns, spacing: 20) {
-                ForEach(vm.recentAlbums) { album in
+                ForEach(Array(vm.recentAlbums.enumerated()), id: \.element.id) { index, album in
                     NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
                         AlbumCell(album: album)
                     }
                     .buttonStyle(.plain)
+                    .staggeredAppear(index: index) // ✅ NEW: Staggered animation
                     .task {
-                        // Trigger load more when near the end
                         if album.id == vm.recentAlbums.last?.id {
                             await vm.loadMore()
                         }
@@ -121,7 +146,7 @@ struct LibraryView: View {
             
         case .artists:
             LazyVStack(spacing: 0) {
-                ForEach(vm.artists) { artist in
+                ForEach(Array(vm.artists.enumerated()), id: \.element.id) { index, artist in
                     NavigationLink(value: Router.Destination.artistDetail(artistId: artist.id)) {
                         HStack {
                             Text(artist.name)
@@ -137,8 +162,8 @@ struct LibraryView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 8)
+                    .staggeredAppear(index: index) // ✅ NEW: Staggered animation
                     .task {
-                        // Trigger load more when near the end
                         if artist.id == vm.artists.last?.id {
                             await vm.loadMore()
                         }
@@ -148,7 +173,7 @@ struct LibraryView: View {
             
         case .genres:
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)]) {
-                ForEach(vm.genres) { genre in
+                ForEach(Array(vm.genres.enumerated()), id: \.element.id) { index, genre in
                     NavigationLink(value: Router.Destination.genreDetail(genreName: genre.name)) {
                         VStack {
                             Text(genre.name)
@@ -163,6 +188,7 @@ struct LibraryView: View {
                         .cornerRadius(12)
                     }
                     .buttonStyle(.plain)
+                    .staggeredAppear(index: index) // ✅ NEW: Staggered animation
                 }
             }
         }

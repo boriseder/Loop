@@ -2,7 +2,7 @@
 //  PlayerView.swift
 //  Loop
 //
-//  FIXED: Uses PlaybackEnvironment and MusicEnvironment
+//  FIXED: Added shuffle, repeat, previous track controls
 //
 
 import SwiftUI
@@ -30,7 +30,7 @@ struct PlayerView: View {
                 
                 // Cover Art
                 let minDimension = min(geometry.size.width, geometry.size.height)
-                let artSize = minDimension * 0.8
+                let artSize = minDimension * 0.75
                 
                 Group {
                     if let image = coverImage {
@@ -49,7 +49,7 @@ struct PlayerView: View {
                 .frame(width: artSize, height: artSize)
                 .clipShape(RoundedRectangle(cornerRadius: 20))
                 .shadow(color: .black.opacity(0.3), radius: 20, x: 0, y: 10)
-                .padding(.bottom, 40)
+                .padding(.bottom, 30)
                 
                 // Metadata
                 VStack(spacing: 8) {
@@ -66,7 +66,7 @@ struct PlayerView: View {
                         .lineLimit(1)
                 }
                 .padding(.horizontal)
-                .padding(.bottom, 30)
+                .padding(.bottom, 20)
                 
                 Spacer()
                 
@@ -97,17 +97,42 @@ struct PlayerView: View {
                     .monospacedDigit()
                 }
                 .padding(.horizontal, 30)
-                .padding(.bottom, 30)
+                .padding(.bottom, 20)
                 
-                // Controls
-                HStack(spacing: 50) {
+                // ✅ NEW: Shuffle and Repeat Controls
+                HStack {
                     Button {
-                        playback.seek(to: 0)
+                        playback.toggleShuffle()
+                    } label: {
+                        Image(systemName: "shuffle")
+                            .font(.system(size: 20))
+                            .foregroundStyle(playback.isShuffled ? Color.accentColor : .secondary)
+                    }
+                    
+                    Spacer()
+                    
+                    Button {
+                        playback.toggleRepeat()
+                    } label: {
+                        Image(systemName: playback.repeatMode.icon)
+                            .font(.system(size: 20))
+                            .foregroundStyle(playback.repeatMode != .off ? Color.accentColor : .secondary)
+                    }
+                }
+                .padding(.horizontal, 40)
+                .padding(.bottom, 20)
+                
+                // Main Controls
+                HStack(spacing: 40) {
+                    // ✅ NEW: Previous button
+                    Button {
+                        playback.skipToPrevious()
                     } label: {
                         Image(systemName: "backward.fill")
                             .font(.system(size: 35))
                     }
                     
+                    // Play/Pause
                     Button {
                         if playback.isPlaying {
                             playback.pause()
@@ -119,6 +144,7 @@ struct PlayerView: View {
                             .font(.system(size: 80))
                     }
                     
+                    // Next
                     Button {
                         playback.skipToNext()
                     } label: {

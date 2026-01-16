@@ -1,8 +1,8 @@
 //
-//  SubsonicModels.swift
+//  SubsonicResponse.swift
 //  Loop
 //
-//  FIXED: Added Sendable conformance for Swift 6 strict concurrency
+//  CRITICAL: No @MainActor isolation - pure Sendable data types
 //
 
 import Foundation
@@ -34,7 +34,7 @@ struct RemoteError: Decodable, Sendable {
     let message: String
 }
 
-// MARK: - Specific Response Types (Helpers for generics)
+// MARK: - Specific Response Types
 
 struct SubsonicPingResponse: Decodable, Sendable {
     let subsonicResponse: SubsonicWrapper

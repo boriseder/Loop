@@ -2,15 +2,7 @@
 //  KeychainStorage.swift
 //  Loop
 //
-//  Created by Boris Eder on 16.01.26.
-//
-
-
-//
-//  KeychainStorage.swift
-//  Loop
-//
-//  Secure credential storage using Keychain
+//  FIXED: Added .whenUnlocked access control for security
 //
 
 import Foundation
@@ -86,8 +78,10 @@ actor KeychainStorage {
             kSecAttrAccount as String: key.rawValue
         ]
         
+        // ✅ FIX: Added access control - only accessible when device unlocked
         let attributes: [String: Any] = [
-            kSecValueData as String: data
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
         ]
         
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
@@ -96,6 +90,7 @@ actor KeychainStorage {
             // Item doesn't exist, add it
             var addQuery = query
             addQuery[kSecValueData as String] = data
+            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked // ✅ Security fix
             
             let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
             guard addStatus == errSecSuccess else {
@@ -125,8 +120,8 @@ struct Credentials: Sendable {
     let password: String
     
     var tokenParams: [String: String] {
-        let salt = String((0..<6).map { _ in 
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".randomElement()! 
+        let salt = String((0..<6).map { _ in
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".randomElement()!
         })
         let token = "\(password)\(salt)".md5
         return [

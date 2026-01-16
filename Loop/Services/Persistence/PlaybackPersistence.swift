@@ -2,7 +2,8 @@
 //  PlaybackPersistence.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  FIXED: Added shuffle and repeat modes
+//  NOTE: This file REPLACES the old Loop/Services/Persistence/PlaybackPersistence.swift
 //
 
 import Foundation
@@ -12,6 +13,38 @@ struct PlaybackState: Codable {
     let currentSongId: String
     let queue: [String]
     let elapsed: Double
+    let isShuffled: Bool
+    let repeatMode: RepeatMode
+    
+    init(currentSongId: String, queue: [String], elapsed: Double, isShuffled: Bool = false, repeatMode: RepeatMode = .off) {
+        self.currentSongId = currentSongId
+        self.queue = queue
+        self.elapsed = elapsed
+        self.isShuffled = isShuffled
+        self.repeatMode = repeatMode
+    }
+}
+
+enum RepeatMode: String, Codable {
+    case off
+    case all
+    case one
+    
+    var next: RepeatMode {
+        switch self {
+        case .off: return .all
+        case .all: return .one
+        case .one: return .off
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .off: return "repeat"
+        case .all: return "repeat"
+        case .one: return "repeat.1"
+        }
+    }
 }
 
 // 2. The Protocol (Interface)
@@ -20,7 +53,7 @@ protocol PlaybackPersistence {
     func load() -> PlaybackState?
 }
 
-// 3. The Concrete Implementation (The actual logic)
+// 3. The Concrete Implementation
 struct UserDefaultsPersistence: PlaybackPersistence {
     private let key = "loop.playback.state"
     

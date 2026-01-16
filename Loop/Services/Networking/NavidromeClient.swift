@@ -2,7 +2,7 @@
 //  NavidromeClient.swift
 //  Loop
 //
-//  Architecture: Thread-safe, cached credentials, retry logic
+//  FIXED: Swift 6 concurrency - nonisolated decoding
 //
 
 import Foundation
@@ -33,6 +33,7 @@ actor NavidromeClient {
     // MARK: - Generic Fetch
     
     func fetch<T: Decodable>(_ endpoint: String, params: [String: String] = [:]) async throws -> T {
+        // Get credentials in isolated context
         guard let credentials = currentSession else {
             throw NetworkError.notAuthenticated
         }
@@ -47,12 +48,12 @@ actor NavidromeClient {
             throw NetworkError.invalidURL
         }
         
-        return try await fetchWithRetry(url: url)
+        // ✅ FIX: Decode in nonisolated context via static method
+        return try await Self.performFetch(url: url, session: session, logger: logger)
     }
     
-    // MARK: - Retry Logic
-    
-    private func fetchWithRetry<T: Decodable>(url: URL, attempt: Int = 1) async throws -> T {
+    // ✅ FIX: Static nonisolated fetch method for decoding
+    private static func performFetch<T: Decodable>(url: URL, session: URLSession, logger: Logger, attempt: Int = 1) async throws -> T {
         let maxRetries = 3
         
         do {
@@ -67,10 +68,10 @@ actor NavidromeClient {
             
             switch httpResponse.statusCode {
             case 200:
+                // ✅ Decode in nonisolated context
                 return try JSONDecoder().decode(T.self, from: data)
                 
             case 401, 403:
-                currentSession = nil
                 throw NetworkError.authenticationFailed
                 
             case 500...599:
@@ -81,17 +82,17 @@ actor NavidromeClient {
             }
             
         } catch {
-            if attempt < maxRetries, shouldRetry(error) {
+            if attempt < maxRetries, Self.shouldRetry(error) {
                 let delay = UInt64(pow(2.0, Double(attempt))) * 1_000_000_000
                 logger.warning("Request failed, retrying (\(attempt)/\(maxRetries)): \(error.localizedDescription)")
                 try await Task.sleep(nanoseconds: delay)
-                return try await fetchWithRetry(url: url, attempt: attempt + 1)
+                return try await performFetch(url: url, session: session, logger: logger, attempt: attempt + 1)
             }
-            throw mapError(error)
+            throw Self.mapError(error)
         }
     }
     
-    private func shouldRetry(_ error: Error) -> Bool {
+    private static func shouldRetry(_ error: Error) -> Bool {
         if let urlError = error as? URLError {
             return [
                 .timedOut,
@@ -102,14 +103,14 @@ actor NavidromeClient {
         return false
     }
     
-    private func mapError(_ error: Error) -> NetworkError {
+    private static func mapError(_ error: Error) -> NetworkError {
         if let netError = error as? NetworkError { return netError }
         return .networkFailure(underlying: error)
     }
     
     // MARK: - Asset URLs
     
-    func coverArtURL(id: String, size: Int = 300) -> URL? {
+    func coverArtURL(id: String, size: Int = 300) async -> URL? {
         guard let credentials = currentSession else { return nil }
         var query = buildTokenParams(for: credentials)
         query["id"] = id
@@ -120,7 +121,7 @@ actor NavidromeClient {
         return comps?.url
     }
     
-    func streamURL(for songId: String) -> URL? {
+    func streamURL(for songId: String) async -> URL? {
         guard let credentials = currentSession else { return nil }
         var query = buildTokenParams(for: credentials)
         query["id"] = songId
@@ -149,7 +150,7 @@ actor NavidromeClient {
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".randomElement()!
         })
         
-        // ✅ FIX: Inlined MD5 calculation to avoid isolation issues with extensions
+        // Inlined MD5 calculation to avoid isolation issues with extensions
         let input = "\(credentials.password)\(salt)"
         let digest = Insecure.MD5.hash(data: input.data(using: .utf8) ?? Data())
         let token = digest.map { String(format: "%02hhx", $0) }.joined()

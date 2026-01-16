@@ -2,7 +2,7 @@
 //  AudioEngine.swift
 //  Loop
 //
-//  FIXED: Proper Task cancellation, removed TimeObserverToken hack
+//  FIXED: Added shuffle, repeat, previous track
 //
 
 import Foundation
@@ -25,6 +25,10 @@ final class AudioEngine {
     
     var errorMessage: String?
     
+    // ✅ NEW: Enhanced playback controls
+    var isShuffled: Bool = false
+    var repeatMode: RepeatMode = .off
+    
     private let provider: AssetProvider
     private let stateStore: PlaybackPersistence
     private let repo: MusicRepository
@@ -33,7 +37,11 @@ final class AudioEngine {
     private let player = AVQueuePlayer()
     private var nowPlayingInfo = [String: Any]()
     
-    // Proper Task-based observation
+    // Queue management
+    private var originalQueue: [String] = []
+    private var currentQueue: [String] = []
+    private var currentIndex: Int = 0
+    
     private var observerTask: Task<Void, Never>?
     private var metadataTask: Task<Void, Never>?
     
@@ -50,9 +58,6 @@ final class AudioEngine {
         Task { await restoreState() }
     }
     
-    // Note: Task cancellation happens automatically when AudioEngine is deallocated
-    // No explicit deinit needed for Task cleanup
-    
     private func setupAudioSession() {
         do {
             try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
@@ -63,22 +68,24 @@ final class AudioEngine {
     }
     
     func setupPlayer(with currentId: String, queue: [String], autoPlay: Bool = true) async {
-        // Cancel any ongoing work
         metadataTask?.cancel()
         
         player.pause()
         player.removeAllItems()
         
         self.currentSongId = currentId
+        self.originalQueue = queue
+        self.currentQueue = isShuffled ? queue.shuffled() : queue
+        self.currentIndex = currentQueue.firstIndex(of: currentId) ?? 0
+        
         self.currentTitle = "Loading..."
         self.currentArtist = ""
         self.currentCoverId = nil
         
-        // Load assets in background (proper cancellation support)
         let loadTask = Task<[AVAsset], Error> {
             var assets: [AVAsset] = []
-            let startIndex = queue.firstIndex(of: currentId) ?? 0
-            let batch = Array(queue[startIndex..<min(startIndex + 3, queue.count)])
+            let startIndex = currentIndex
+            let batch = Array(currentQueue[startIndex..<min(startIndex + 3, currentQueue.count)])
             
             for songId in batch {
                 try Task.checkCancellation()
@@ -97,7 +104,6 @@ final class AudioEngine {
                 return
             }
             
-            // Create items on MainActor
             for asset in loadedAssets {
                 let item = AVPlayerItem(asset: asset)
                 player.insert(item, after: nil)
@@ -108,15 +114,13 @@ final class AudioEngine {
             
             if autoPlay { play() }
             
-            // Load metadata asynchronously
             metadataTask = Task.detached(priority: .userInitiated) {
                 await self.loadMetadata(for: currentId)
             }
             
-            saveState(queue: queue)
+            saveState()
             
         } catch is CancellationError {
-            // Silently handle cancellation
             return
         } catch {
             self.errorMessage = "Failed to setup player: \(error.localizedDescription)"
@@ -154,8 +158,85 @@ final class AudioEngine {
         saveState()
     }
     
+    // ✅ NEW: Previous track
+    func skipToPrevious() {
+        // If more than 5 seconds into song, restart current song
+        if player.currentTime().seconds > 5.0 {
+            seek(to: 0)
+            return
+        }
+        
+        // Otherwise go to previous song
+        guard currentIndex > 0 else {
+            seek(to: 0)
+            return
+        }
+        
+        currentIndex -= 1
+        let previousId = currentQueue[currentIndex]
+        
+        Task {
+            await setupPlayer(with: previousId, queue: originalQueue, autoPlay: isPlaying)
+        }
+    }
+    
+    // ✅ ENHANCED: Next track with repeat logic
     func skipToNext() {
-        player.advanceToNextItem()
+        switch repeatMode {
+        case .one:
+            // Repeat current song
+            seek(to: 0)
+            play()
+            return
+            
+        case .all:
+            // Move to next, loop at end
+            if currentIndex < currentQueue.count - 1 {
+                currentIndex += 1
+            } else {
+                currentIndex = 0 // Loop to start
+            }
+            
+        case .off:
+            // Move to next, stop at end
+            guard currentIndex < currentQueue.count - 1 else {
+                pause()
+                return
+            }
+            currentIndex += 1
+        }
+        
+        let nextId = currentQueue[currentIndex]
+        Task {
+            await setupPlayer(with: nextId, queue: originalQueue, autoPlay: isPlaying)
+        }
+    }
+    
+    // ✅ NEW: Toggle shuffle
+    func toggleShuffle() {
+        isShuffled.toggle()
+        
+        // Rebuild queue
+        if isShuffled {
+            // Shuffle but keep current song at front
+            var remaining = originalQueue.filter { $0 != currentSongId }
+            remaining.shuffle()
+            currentQueue = [currentSongId].compactMap { $0 } + remaining
+        } else {
+            currentQueue = originalQueue
+        }
+        
+        // Update index
+        if let currentId = currentSongId {
+            currentIndex = currentQueue.firstIndex(of: currentId) ?? 0
+        }
+        
+        saveState()
+    }
+    
+    // ✅ NEW: Toggle repeat
+    func toggleRepeat() {
+        repeatMode = repeatMode.next
         saveState()
     }
     
@@ -191,18 +272,24 @@ final class AudioEngine {
         }
     }
 
-    private func saveState(queue: [String]? = nil) {
+    private func saveState() {
         guard let currentSongId else { return }
         let state = PlaybackState(
             currentSongId: currentSongId,
-            queue: queue ?? [],
-            elapsed: player.currentTime().seconds
+            queue: originalQueue,
+            elapsed: player.currentTime().seconds,
+            isShuffled: isShuffled,
+            repeatMode: repeatMode
         )
         stateStore.save(state)
     }
     
     private func restoreState() async {
         guard let saved: PlaybackState = stateStore.load() else { return }
+        
+        self.isShuffled = saved.isShuffled
+        self.repeatMode = saved.repeatMode
+        
         await setupPlayer(with: saved.currentSongId, queue: saved.queue, autoPlay: false)
         await player.seek(to: CMTime(seconds: saved.elapsed, preferredTimescale: 600))
     }
@@ -220,17 +307,22 @@ final class AudioEngine {
             return .success
         }
         
+        // ✅ NEW: Previous track command
+        commandCenter.previousTrackCommand.addTarget { [weak self] _ in
+            Task { @MainActor [weak self] in self?.skipToPrevious() }
+            return .success
+        }
+        
         commandCenter.nextTrackCommand.addTarget { [weak self] _ in
             Task { @MainActor [weak self] in self?.skipToNext() }
             return .success
         }
     }
     
-    // FIXED: Use Task instead of TimeObserverToken
     private func startProgressObserver() {
         observerTask = Task { @MainActor in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
+                try? await Task.sleep(nanoseconds: 500_000_000)
                 
                 guard !Task.isCancelled,
                       player.currentItem != nil,

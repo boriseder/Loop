@@ -2,7 +2,7 @@
 //  LoopApp.swift
 //  Loop
 //
-//  FIXED: Uses granular environment objects
+//  FIXED: Shows sync progress modal
 //
 
 import SwiftUI
@@ -26,6 +26,21 @@ struct LoopApp: App {
             .environment(container.playback)
             .environment(container.downloads)
             .environment(container.router)
+            // ✅ NEW: Show sync progress modal
+            .overlay {
+                if container.music.isSyncing {
+                    SyncProgressView(
+                        progress: container.music.syncProgress,
+                        onCancel: {
+                            Task {
+                                await container.music.cancelSync()
+                            }
+                        }
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                }
+            }
+            .animation(.easeInOut, value: container.music.isSyncing)
         }
     }
     
@@ -33,16 +48,27 @@ struct LoopApp: App {
     private func AuthenticatedRoot() -> some View {
         @Bindable var router = container.router
         
-        NavigationStack(path: $router.path) {
-            LibraryView()
-                .navigationDestination(for: Router.Destination.self) { destination in
-                    destinationView(for: destination)
+        // ✅ NEW: TabView with Library and Downloads
+        TabView {
+            NavigationStack(path: $router.path) {
+                LibraryView()
+                    .navigationDestination(for: Router.Destination.self) { destination in
+                        destinationView(for: destination)
+                    }
+            }
+            .tabItem {
+                Label("Library", systemImage: "square.stack")
+            }
+            
+            DownloadsView()
+                .tabItem {
+                    Label("Downloads", systemImage: "arrow.down.circle")
                 }
         }
         .overlay(alignment: .bottom) {
             if container.playback.currentSongId != nil {
                 MiniPlayerView()
-                    .padding(.bottom, 20)
+                    .padding(.bottom, 70) // ✅ Adjusted for tab bar
                     .padding(.horizontal, 12)
                     .onTapGesture { isPlayerPresented = true }
                     .transition(.move(edge: .bottom))

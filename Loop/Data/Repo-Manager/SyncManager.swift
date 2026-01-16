@@ -2,7 +2,7 @@
 //  SyncManager.swift
 //  Loop
 //
-//  FIXED: Proper async/await, cancellation support
+//  FIXED: Progress reporting for UI
 //
 
 import Foundation
@@ -24,10 +24,18 @@ actor SyncManager {
     private var isSyncing = false
     private var syncTask: Task<Void, Error>?
     
+    // ✅ NEW: Progress callback with proper isolation
+    private var progressCallback: (@Sendable @MainActor (SyncProgress) -> Void)?
+    
     init(repo: MusicRepository, client: NavidromeClient, cache: CoverArtCache) {
         self.repo = repo
         self.client = client
         self.cache = cache
+    }
+    
+    // ✅ NEW: Setter for progress callback
+    func setProgressCallback(_ callback: @escaping @Sendable @MainActor (SyncProgress) -> Void) {
+        self.progressCallback = callback
     }
     
     func performSmartSync() async throws {
@@ -58,6 +66,9 @@ actor SyncManager {
                 let albumCount = try await syncAlbumPage(type: "newest", offset: offset, size: pageSize)
                 totalAlbums += albumCount
                 
+                // ✅ Report progress
+                await reportProgress(.albums(current: totalAlbums, total: max(totalAlbums, 500)))
+                
                 if albumCount < pageSize {
                     hasMore = false
                 } else {
@@ -71,12 +82,16 @@ actor SyncManager {
             
             // 2. Sync genres
             try Task.checkCancellation()
+            await reportProgress(.genres)
             try await syncGenres()
             logger.info("✅ Synced genres")
             
             // 3. Download ALL cover art for ALL albums
             try Task.checkCancellation()
-            await downloadAllCovers()
+            await downloadAllCovers(totalAlbums: totalAlbums)
+            
+            // 4. Complete
+            await reportProgress(.complete)
         }
         
         do {
@@ -84,9 +99,11 @@ actor SyncManager {
             logger.info("✅ FULL offline sync complete - app is ready for offline use")
         } catch is CancellationError {
             logger.info("Sync cancelled")
+            await reportProgress(.idle)
             throw SyncError.cancelled
         } catch {
             logger.error("❌ Sync failed: \(error.localizedDescription)")
+            await reportProgress(.failed(error: error.localizedDescription))
             throw error
         }
     }
@@ -128,7 +145,7 @@ actor SyncManager {
         }
     }
     
-    private func downloadAllCovers() async {
+    private func downloadAllCovers(totalAlbums: Int) async {
         logger.info("🖼️ Starting FULL cover download for offline use...")
         
         do {
@@ -155,7 +172,7 @@ actor SyncManager {
             // Download ALL covers with concurrency limit
             await withTaskGroup(of: Void.self) { group in
                 var downloaded = 0
-                let maxConcurrent = 10  // Higher concurrency for initial sync
+                let maxConcurrent = 10
                 var activeCount = 0
                 
                 for album in albumsWithCovers {
@@ -167,8 +184,9 @@ actor SyncManager {
                         activeCount -= 1
                         downloaded += 1
                         
-                        if downloaded % 50 == 0 {
-                            logger.info("Downloaded \(downloaded)/\(albumsWithCovers.count) covers")
+                        // ✅ Report progress every 10 covers
+                        if downloaded % 10 == 0 {
+                            await reportProgress(.covers(current: downloaded, total: albumsWithCovers.count))
                         }
                     }
                     
@@ -190,6 +208,14 @@ actor SyncManager {
             
         } catch {
             logger.error("Cover download failed: \(error)")
+        }
+    }
+    
+    // ✅ NEW: Progress reporting helper
+    private func reportProgress(_ phase: SyncProgress.Phase) async {
+        let progress = SyncProgress(phase: phase)
+        if let callback = progressCallback {
+            await callback(progress)
         }
     }
 }
