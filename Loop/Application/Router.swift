@@ -2,7 +2,7 @@
 //  Router.swift
 //  Loop
 //
-//  FIXED: Added downloads destination
+//  FIXED: Added showDownloadedOnly to Artist destination
 //
 
 import SwiftUI
@@ -15,24 +15,25 @@ final class Router {
     
     enum Destination: Hashable, Codable {
         case albumDetail(albumId: String)
-        case artistDetail(artistId: String)
+        // ✅ UPDATE: Carry filter state
+        case artistDetail(artistId: String, showDownloadedOnly: Bool)
         case genreDetail(genreName: String, showDownloadedOnly: Bool)
-        case downloads // ✅ NEW destination
+        case downloads
     }
     
     func navigateToAlbum(_ id: String) {
         path.append(Destination.albumDetail(albumId: id))
     }
     
-    func navigateToArtist(_ id: String) {
-        path.append(Destination.artistDetail(artistId: id))
+    // ✅ UPDATE: Default to false
+    func navigateToArtist(_ id: String, showDownloadedOnly: Bool = false) {
+        path.append(Destination.artistDetail(artistId: id, showDownloadedOnly: showDownloadedOnly))
     }
     
     func navigateToGenre(_ name: String, showDownloadedOnly: Bool = false) {
         path.append(Destination.genreDetail(genreName: name, showDownloadedOnly: showDownloadedOnly))
     }
     
-    // ✅ NEW navigation function
     func navigateToDownloads() {
         path.append(Destination.downloads)
     }

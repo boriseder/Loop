@@ -2,7 +2,7 @@
 //  LibraryView.swift
 //  Loop
 //
-//  FIXED: Included AlbumCell at the bottom to resolve "Cannot find in scope" error.
+//  FIXED: Pass filter state to Artist Detail
 //
 
 import SwiftUI
@@ -91,7 +91,6 @@ struct LibraryView: View {
                 }
             }
             
-            // Downloads Button
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     router.navigateToDownloads()
@@ -151,7 +150,8 @@ struct LibraryView: View {
         case .artists:
             LazyVStack(spacing: 0) {
                 ForEach(vm.filteredArtists) { artist in
-                    NavigationLink(value: Router.Destination.artistDetail(artistId: artist.id)) {
+                    // ✅ UPDATE: Pass vm.showDownloadedOnly
+                    NavigationLink(value: Router.Destination.artistDetail(artistId: artist.id, showDownloadedOnly: vm.showDownloadedOnly)) {
                         HStack {
                             Text(artist.name).font(.body)
                             Spacer()
@@ -197,7 +197,7 @@ struct LibraryView: View {
     }
 }
 
-// MARK: - Album Cell (Essential)
+// Ensure AlbumCell is available (retained from previous files)
 struct AlbumCell: View {
     let album: AlbumDTO
     @Environment(MusicEnvironment.self) private var music

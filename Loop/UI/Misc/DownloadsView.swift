@@ -28,7 +28,12 @@ struct DownloadsView: View {
                 ProgressView()
                     .padding(.top, 40)
             } else if downloadedAlbums.isEmpty {
-                emptyStateView
+                ContentUnavailableView(
+                    "No Downloads",
+                    systemImage: "arrow.down.circle",
+                    description: Text("Downloaded albums will appear here for offline listening")
+                )
+                .padding(.top, 60)
             } else {
                 VStack(spacing: 24) {
                     // Storage Info Card
@@ -39,6 +44,7 @@ struct DownloadsView: View {
                     // Downloaded Albums Grid
                     LazyVGrid(columns: columns, spacing: 20) {
                         ForEach(downloadedAlbums) { album in
+                            // ✅ Uses Router.Destination, works because we are in the main stack
                             NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
                                 DownloadedAlbumCell(album: album)
                             }
@@ -125,24 +131,12 @@ struct DownloadsView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
     
-    // MARK: - Empty State
-    
-    private var emptyStateView: some View {
-        ContentUnavailableView(
-            "No Downloads",
-            systemImage: "arrow.down.circle",
-            description: Text("Downloaded albums will appear here for offline listening")
-        )
-        .padding(.top, 60)
-    }
-    
     // MARK: - Data Loading
     
     private func loadDownloads() async {
         isLoading = true
         
         do {
-            // Get all albums
             var allAlbums: [AlbumDTO] = []
             var offset = 0
             let pageSize = 500
@@ -159,7 +153,6 @@ struct DownloadsView: View {
                 }
             }
             
-            // Filter for downloaded albums
             var downloaded: [AlbumDTO] = []
             
             for album in allAlbums {
@@ -173,7 +166,6 @@ struct DownloadsView: View {
             
             downloadedAlbums = downloaded
             
-            // Calculate total size
             let fileManager = FileManager.default
             let musicDir = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("Music")
@@ -227,8 +219,6 @@ struct DownloadsView: View {
     }
 }
 
-// MARK: - Downloaded Album Cell
-
 struct DownloadedAlbumCell: View {
     let album: AlbumDTO
     @Environment(MusicEnvironment.self) private var music
@@ -253,7 +243,6 @@ struct DownloadedAlbumCell: View {
                 }
                 .frame(width: 180, height: 180)
                 
-                // Downloaded badge
                 Image(systemName: "checkmark.circle.fill")
                     .font(.title3)
                     .foregroundStyle(.white)
@@ -295,7 +284,6 @@ struct DownloadedAlbumCell: View {
     let downloadManager = DownloadManager(client: client)
     let syncManager = SyncManager(repo: repo, client: client, cache: coverCache)
     
-    // ✅ FIXED: Correctly initializes MusicEnvironment (4 arguments)
     let musicEnv = MusicEnvironment(repo: repo, sync: syncManager, coverCache: coverCache, downloads: downloadManager)
     let downloadEnv = DownloadEnvironment(manager: downloadManager)
     let router = Router()

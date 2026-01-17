@@ -2,7 +2,7 @@
 //  LibraryViewModel.swift
 //  Loop
 //
-//  FIXED: Renamed 'recentAlbums' -> 'albums', uses Global Download State
+//  FIXED: Robust state handling (defer) and pagination reset on reload
 //
 
 import Foundation
@@ -21,18 +21,16 @@ final class LibraryViewModel {
         didSet {
             if scope != oldValue {
                 resetPagination()
+                // Cancel previous tasks implicitly by starting new one
                 Task { await loadCurrentScope() }
             }
         }
     }
     
-    // ✅ RENAMED: 'recentAlbums' is misleading. It's just 'albums'.
     var albums: [AlbumDTO] = []
     var artists: [ArtistDTO] = []
     var genres: [GenreDTO] = []
     
-    // ✅ FILTERED: Uses Global State from 'music' environment directly
-    // This ensures that if the state updates anywhere in the app, this view updates instantly.
     var filteredAlbums: [AlbumDTO] {
         showDownloadedOnly ? albums.filter { music.downloadedAlbumIds.contains($0.id) } : albums
     }
@@ -62,15 +60,13 @@ final class LibraryViewModel {
     }
     
     func loadInitialData() async {
-        // 1. Try to load existing data from DB
-        await loadCurrentScope()
+        // ✅ FIX: Reset pagination when view reappears so we don't load "Page 10" as the only content
+        resetPagination()
         
-        // 2. Refresh Global Download State (scans the disk)
+        await loadCurrentScope()
         await music.updateDownloadedState()
         
-        // 3. Only force sync if DB is TRULY empty
         if albums.isEmpty && artists.isEmpty && genres.isEmpty {
-            print("⚠️ DB is empty. Triggering Force Sync.")
             statusMessage = "First launch - downloading library..."
             await refresh(force: true)
         } else {
@@ -81,7 +77,6 @@ final class LibraryViewModel {
     func updateFilter(downloadedOnly: Bool) async {
         showDownloadedOnly = downloadedOnly
         if downloadedOnly {
-            // Trigger a fresh scan when filter is enabled to be sure
             await music.updateDownloadedState()
         }
     }
@@ -91,10 +86,8 @@ final class LibraryViewModel {
         do {
             try await music.performSync(force: force)
             
-            // 3. Reload data after sync
             resetPagination()
             await loadCurrentScope()
-            // Update global state after sync potentially brought in new files/metadata
             await music.updateDownloadedState()
             
             statusMessage = "✅ Ready"
@@ -116,9 +109,13 @@ final class LibraryViewModel {
         guard !isLoading else { return }
         isLoading = true
         
+        // ✅ FIX: Ensure isLoading is ALWAYS reset, even if cancelled/crashed
+        defer { isLoading = false }
+        
         do {
             switch scope {
             case .recent:
+                // Use the safe Repo method (Sorting in memory)
                 let newAlbums = try await music.getAlbums(offset: currentOffset, limit: pageSize)
                 
                 if append {
@@ -130,6 +127,8 @@ final class LibraryViewModel {
                 
             case .artists:
                 let newArtists = try await music.getArtists(offset: currentOffset, limit: pageSize)
+                print("✅ ViewModel: Received \(newArtists.count) artists")
+                
                 if append {
                     artists.append(contentsOf: newArtists)
                 } else {
@@ -147,8 +146,6 @@ final class LibraryViewModel {
             print("❌ Error loading: \(error)")
             statusMessage = "Failed to load: \(error.localizedDescription)"
         }
-        
-        isLoading = false
     }
     
     private func resetPagination() {

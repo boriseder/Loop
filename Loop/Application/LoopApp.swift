@@ -2,7 +2,7 @@
 //  LoopApp.swift
 //  Loop
 //
-//  FIXED: Handling for Downloads destination
+//  FIXED: Pass filter state to ArtistDetailView
 //
 
 import SwiftUI
@@ -30,11 +30,7 @@ struct LoopApp: App {
                 if container.music.isSyncing {
                     SyncProgressView(
                         progress: container.music.syncProgress,
-                        onCancel: {
-                            Task {
-                                await container.music.cancelSync()
-                            }
-                        }
+                        onCancel: { Task { await container.music.cancelSync() } }
                     )
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
@@ -73,11 +69,12 @@ struct LoopApp: App {
         switch destination {
         case .albumDetail(let id):
             AlbumDetailView(albumId: id)
-        case .artistDetail(let id):
-            ArtistDetailView(artistId: id)
+        // ✅ UPDATE: Pass flag
+        case .artistDetail(let id, let showDownloaded):
+            ArtistDetailView(artistId: id, showDownloadedOnly: showDownloaded)
         case .genreDetail(let name, let showDownloaded):
             GenreDetailView(genreName: name, showDownloadedOnly: showDownloaded)
-        case .downloads: // ✅ NEW Case
+        case .downloads:
             DownloadsView()
         }
     }

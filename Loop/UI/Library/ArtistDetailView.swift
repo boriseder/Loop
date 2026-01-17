@@ -2,13 +2,14 @@
 //  ArtistDetailView.swift
 //  Loop
 //
-//  FIXED: Uses MusicEnvironment, async operations
+//  FIXED: Added downloaded filter support
 //
 
 import SwiftUI
 
 struct ArtistDetailView: View {
     let artistId: String
+    let showDownloadedOnly: Bool // ✅ Added param
     
     @Environment(MusicEnvironment.self) private var music
     @State private var viewModel: ArtistDetailViewModel?
@@ -38,6 +39,16 @@ struct ArtistDetailView: View {
                             Text("\(vm.albums.count) Albums")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
+                            
+                            // ✅ Indicator
+                            if showDownloadedOnly {
+                                Label("Downloaded Only", systemImage: "arrow.down.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                                    .padding(4)
+                                    .background(Color.green.opacity(0.1))
+                                    .clipShape(Capsule())
+                            }
                         }
                         Spacer()
                     }
@@ -48,6 +59,13 @@ struct ArtistDetailView: View {
                     // MARK: - Albums List
                     if vm.isLoading && vm.albums.isEmpty {
                         ProgressView().padding(.top, 40)
+                    } else if vm.albums.isEmpty {
+                         ContentUnavailableView(
+                            "No Albums",
+                            systemImage: "music.note",
+                            description: Text(showDownloadedOnly ? "No downloaded albums found" : "No albums found")
+                        )
+                        .padding(.top, 40)
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 20)], spacing: 24) {
                             ForEach(vm.albums, id: \.id) { album in
@@ -85,7 +103,11 @@ struct ArtistDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if viewModel == nil {
-                viewModel = ArtistDetailViewModel(artistId: artistId, music: music)
+                viewModel = ArtistDetailViewModel(
+                    artistId: artistId,
+                    showDownloadedOnly: showDownloadedOnly,
+                    music: music
+                )
             }
         }
         .task {
