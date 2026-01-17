@@ -2,7 +2,7 @@
 //  LibraryView.swift
 //  Loop
 //
-//  OPTIMIZED: High-performance scrolling (Removed staggering & enumeration)
+//  FIXED: Included AlbumCell at the bottom to resolve "Cannot find in scope" error.
 //
 
 import SwiftUI
@@ -10,12 +10,13 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(MusicEnvironment.self) private var music
     @Environment(DownloadEnvironment.self) private var downloads
+    @Environment(Router.self) private var router
+    
     @State private var viewModel: LibraryViewModel?
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var showDownloadedOnly = false
     
-    // Fixed column size is more performant than adaptive for images
     private let columns = [
         GridItem(.adaptive(minimum: 160, maximum: 180), spacing: 16)
     ]
@@ -64,7 +65,6 @@ struct LibraryView: View {
             
             // Main Content
             ScrollView {
-                // Optimization: Simple check avoids View tree complexity
                 if vm.isLoading && vm.filteredAlbums.isEmpty {
                     AlbumGridSkeleton()
                 } else if vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty && vm.filteredGenres.isEmpty {
@@ -88,6 +88,15 @@ struct LibraryView: View {
                     Toggle(isOn: $showDownloadedOnly) { Label("Downloaded Only", systemImage: "arrow.down.circle") }
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
+                }
+            }
+            
+            // Downloads Button
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    router.navigateToDownloads()
+                } label: {
+                    Image(systemName: "arrow.down.circle")
                 }
             }
         }
@@ -126,15 +135,12 @@ struct LibraryView: View {
         switch vm.scope {
         case .recent:
             LazyVGrid(columns: columns, spacing: 20) {
-                // OPTIMIZED: Direct iteration, no Array creation, no Enumeration
                 ForEach(vm.filteredAlbums) { album in
                     NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
                         AlbumCell(album: album)
                     }
                     .buttonStyle(.plain)
-                    // REMOVED: .staggeredAppear (Major lag cause)
                     .task {
-                        // Prefetch logic
                         if album.id == vm.filteredAlbums.last?.id {
                             await vm.loadMore()
                         }
@@ -168,7 +174,7 @@ struct LibraryView: View {
         case .genres:
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)]) {
                 ForEach(vm.filteredGenres) { genre in
-                    NavigationLink(value: Router.Destination.genreDetail(genreName: genre.name)) {
+                    NavigationLink(value: Router.Destination.genreDetail(genreName: genre.name, showDownloadedOnly: vm.showDownloadedOnly)) {
                         VStack(spacing: 8) {
                             Text(genre.name)
                                 .font(.headline)
@@ -191,7 +197,7 @@ struct LibraryView: View {
     }
 }
 
-// MARK: - Optimized Album Cell
+// MARK: - Album Cell (Essential)
 struct AlbumCell: View {
     let album: AlbumDTO
     @Environment(MusicEnvironment.self) private var music
@@ -212,7 +218,7 @@ struct AlbumCell: View {
                         .foregroundStyle(.secondary.opacity(0.5))
                 }
             }
-            .frame(width: 160, height: 160) // Fixed size is faster for layout
+            .frame(width: 160, height: 160)
             .clipShape(RoundedRectangle(cornerRadius: 12))
             
             VStack(alignment: .leading, spacing: 4) {
@@ -227,11 +233,9 @@ struct AlbumCell: View {
                     .lineLimit(1)
             }
         }
-        .contentShape(Rectangle()) // Improves hit testing performance
+        .contentShape(Rectangle())
         .task(id: album.coverArtId) {
-            // Load image only when visible
             if let coverId = album.coverArtId {
-                // Logic is handled by Actor, safe for main thread
                 coverImage = await music.getCoverImage(for: coverId, size: 300)
             }
         }

@@ -2,13 +2,14 @@
 //  GenreDetailView.swift
 //  Loop
 //
-//  FIXED: Uses MusicEnvironment, async operations
+//  FIXED: Accepts 'showDownloadedOnly' and filters content
 //
 
 import SwiftUI
 
 struct GenreDetailView: View {
     let genreName: String
+    let showDownloadedOnly: Bool // ✅ Added parameter
     
     @Environment(MusicEnvironment.self) private var music
     @State private var viewModel: GenreDetailViewModel?
@@ -36,6 +37,15 @@ struct GenreDetailView: View {
                         Text("\(vm.albums.count) Albums")
                             .font(.headline)
                             .foregroundStyle(.secondary)
+                        
+                        if vm.showDownloadedOnly {
+                            Label("Downloaded Only", systemImage: "arrow.down.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                                .padding(6)
+                                .background(Color.green.opacity(0.1))
+                                .clipShape(Capsule())
+                        }
                     }
                     .padding(.top, 20)
                     
@@ -85,7 +95,11 @@ struct GenreDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if viewModel == nil {
-                viewModel = GenreDetailViewModel(genreName: genreName, music: music)
+                viewModel = GenreDetailViewModel(
+                    genreName: genreName,
+                    showDownloadedOnly: showDownloadedOnly,
+                    music: music
+                )
             }
         }
         .task {

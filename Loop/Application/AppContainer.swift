@@ -2,7 +2,7 @@
 //  AppContainer.swift
 //  Loop
 //
-//  FIXED: DownloadEnvironment exposes thread-safe storage
+//  FIXED: Global Download State moved to MusicEnvironment
 //
 
 import Foundation
@@ -47,7 +47,8 @@ final class AppContainer {
         self.repo = repo
         
         self.auth = AuthEnvironment(service: authService)
-        self.music = MusicEnvironment(repo: repo, sync: syncManager, coverCache: coverCache)
+        // ✅ Inject DownloadManager into MusicEnvironment so it can scan files
+        self.music = MusicEnvironment(repo: repo, sync: syncManager, coverCache: coverCache, downloads: downloadManager)
         self.playback = PlaybackEnvironment(engine: audioEngine)
         self.downloads = DownloadEnvironment(manager: downloadManager)
     }
@@ -80,14 +81,21 @@ final class MusicEnvironment {
     private let repo: MusicRepository
     private let sync: SyncManager
     private let coverCache: CoverArtCache
+    private let downloadManager: DownloadManager // ✅ Internal reference for scanning
     
     private(set) var syncProgress: SyncProgress = SyncProgress(phase: .idle)
     private(set) var isSyncing = false
     
-    init(repo: MusicRepository, sync: SyncManager, coverCache: CoverArtCache) {
+    // ✅ GLOBAL Download State (Observed by all ViewModels)
+    var downloadedAlbumIds: Set<String> = []
+    var downloadedArtistIds: Set<String> = []
+    var downloadedGenres: Set<String> = []
+    
+    init(repo: MusicRepository, sync: SyncManager, coverCache: CoverArtCache, downloads: DownloadManager) {
         self.repo = repo
         self.sync = sync
         self.coverCache = coverCache
+        self.downloadManager = downloads
         
         Task { @MainActor in
             await sync.setProgressCallback { [weak self] progress in
@@ -96,6 +104,49 @@ final class MusicEnvironment {
             }
         }
     }
+    
+    // ✅ GLOBAL State Update Logic
+    // This runs a deep scan of the library to see what is fully downloaded.
+    func updateDownloadedState() async {
+        let storage = downloadManager.storage
+        let repo = self.repo
+        
+        // Run deep scan in background thread to avoid freezing UI
+        let state = await Task.detached(priority: .utility) {
+            var dAlbums = Set<String>()
+            var dArtists = Set<String>()
+            var dGenres = Set<String>()
+            
+            do {
+                // Fetch all albums to check their download status
+                // (In a massive library, you might optimize this to only check local file structure,
+                // but checking via DB ensures consistency with metadata)
+                let allAlbums = try await repo.getAlbums(offset: 0, limit: 10000)
+                
+                for album in allAlbums {
+                    // Check if all songs in this album are downloaded
+                    if let songs = try? await repo.getSongs(for: album.id) {
+                        let songIds = songs.map { $0.id }
+                        if !songIds.isEmpty && storage.isAlbumFullyDownloaded(songIds: songIds) {
+                            dAlbums.insert(album.id)
+                            dArtists.insert(album.artistId)
+                            if let g = album.genre { dGenres.insert(g) }
+                        }
+                    }
+                }
+            } catch {
+                print("Error calculating global download state: \(error)")
+            }
+            return (dAlbums, dArtists, dGenres)
+        }.value
+        
+        // Update MainActor state
+        self.downloadedAlbumIds = state.0
+        self.downloadedArtistIds = state.1
+        self.downloadedGenres = state.2
+    }
+    
+    // MARK: - Read Operations
     
     func getAlbums(offset: Int = 0, limit: Int = 100) async throws -> [AlbumDTO] {
         try await repo.getAlbums(offset: offset, limit: limit)
@@ -150,10 +201,10 @@ final class MusicEnvironment {
     }
 }
 
+// (PlaybackEnvironment and DownloadEnvironment remain unchanged)
 @Observable @MainActor
 final class PlaybackEnvironment {
     private let engine: AudioEngine
-    
     var isPlaying: Bool { engine.isPlaying }
     var currentSongId: String? { engine.currentSongId }
     var currentTitle: String { engine.currentTitle }
@@ -162,14 +213,9 @@ final class PlaybackEnvironment {
     var progress: Double { engine.progress }
     var duration: Double { engine.duration }
     var errorMessage: String? { engine.errorMessage }
-    
     var isShuffled: Bool { engine.isShuffled }
     var repeatMode: RepeatMode { engine.repeatMode }
-    
-    init(engine: AudioEngine) {
-        self.engine = engine
-    }
-    
+    init(engine: AudioEngine) { self.engine = engine }
     func play() { engine.play() }
     func pause() { engine.pause() }
     func seek(to seconds: Double) { engine.seek(to: seconds) }
@@ -177,7 +223,6 @@ final class PlaybackEnvironment {
     func skipToPrevious() { engine.skipToPrevious() }
     func toggleShuffle() { engine.toggleShuffle() }
     func toggleRepeat() { engine.toggleRepeat() }
-    
     func setupPlayer(with songId: String, queue: [String], autoPlay: Bool = true) async {
         await engine.setupPlayer(with: songId, queue: queue, autoPlay: autoPlay)
     }
@@ -186,37 +231,15 @@ final class PlaybackEnvironment {
 @Observable @MainActor
 final class DownloadEnvironment {
     private let manager: DownloadManager
-    
     var activeDownloads: Set<String> { manager.activeDownloads }
-    
-    // ✅ EXPOSED: storage is now visible to ViewModels
     var storage: DownloadStorage { manager.storage }
-    
-    init(manager: DownloadManager) {
-        self.manager = manager
-    }
-    
-    func isPinned(songId: String) -> Bool {
-        manager.isPinned(songId: songId)
-    }
-    
-    func isAlbumFullyDownloaded(songIds: [String]) -> Bool {
-        manager.isAlbumFullyDownloaded(songIds: songIds)
-    }
-    
-    func isDownloading(albumId: String) -> Bool {
-        manager.isDownloading(albumId: albumId)
-    }
-    
-    func download(song: SongDTO) async {
-        await manager.downloadSong(id: song.id, path: song.path, coverId: song.coverArtId)
-    }
-    
+    init(manager: DownloadManager) { self.manager = manager }
+    func isPinned(songId: String) -> Bool { manager.isPinned(songId: songId) }
+    func isAlbumFullyDownloaded(songIds: [String]) -> Bool { manager.isAlbumFullyDownloaded(songIds: songIds) }
+    func isDownloading(albumId: String) -> Bool { manager.isDownloading(albumId: albumId) }
+    func download(song: SongDTO) async { await manager.downloadSong(id: song.id, path: song.path, coverId: song.coverArtId) }
     func downloadAlbum(albumId: String, songs: [SongDTO]) async {
         await manager.downloadAlbum(albumId: albumId, songs: songs.map { ($0.id, $0.path, $0.coverArtId) })
     }
-    
-    func deleteDownload(songId: String) {
-        manager.deleteDownload(songId: songId)
-    }
+    func deleteDownload(songId: String) { manager.deleteDownload(songId: songId) }
 }

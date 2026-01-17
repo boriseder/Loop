@@ -2,7 +2,7 @@
 //  DownloadsView.swift
 //  Loop
 //
-//  NEW: Dedicated view for managing offline downloads
+//  FIXED: Removed nested NavigationStack & Fixed Preview
 //
 
 import SwiftUI
@@ -22,66 +22,65 @@ struct DownloadsView: View {
     ]
     
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                if isLoading {
-                    ProgressView()
-                        .padding(.top, 40)
-                } else if downloadedAlbums.isEmpty {
-                    emptyStateView
-                } else {
-                    VStack(spacing: 24) {
-                        // Storage Info Card
-                        storageInfoCard
-                            .padding(.horizontal)
-                            .padding(.top)
-                        
-                        // Downloaded Albums Grid
-                        LazyVGrid(columns: columns, spacing: 20) {
-                            ForEach(downloadedAlbums) { album in
-                                NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
-                                    DownloadedAlbumCell(album: album)
-                                }
-                                .buttonStyle(.plain)
-                                .contextMenu {
-                                    Button(role: .destructive) {
-                                        deleteAlbum(album)
-                                    } label: {
-                                        Label("Delete Download", systemImage: "trash")
-                                    }
+        // ❌ REMOVED: NavigationStack (Inherits from LoopApp)
+        ScrollView {
+            if isLoading {
+                ProgressView()
+                    .padding(.top, 40)
+            } else if downloadedAlbums.isEmpty {
+                emptyStateView
+            } else {
+                VStack(spacing: 24) {
+                    // Storage Info Card
+                    storageInfoCard
+                        .padding(.horizontal)
+                        .padding(.top)
+                    
+                    // Downloaded Albums Grid
+                    LazyVGrid(columns: columns, spacing: 20) {
+                        ForEach(downloadedAlbums) { album in
+                            NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
+                                DownloadedAlbumCell(album: album)
+                            }
+                            .buttonStyle(.plain)
+                            .contextMenu {
+                                Button(role: .destructive) {
+                                    deleteAlbum(album)
+                                } label: {
+                                    Label("Delete Download", systemImage: "trash")
                                 }
                             }
                         }
-                        .padding()
+                    }
+                    .padding()
+                }
+            }
+        }
+        .navigationTitle("Downloads")
+        .toolbar {
+            if !downloadedAlbums.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(role: .destructive) {
+                        showDeleteAlert = true
+                    } label: {
+                        Image(systemName: "trash")
                     }
                 }
             }
-            .navigationTitle("Downloads")
-            .toolbar {
-                if !downloadedAlbums.isEmpty {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button(role: .destructive) {
-                            showDeleteAlert = true
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                    }
-                }
+        }
+        .alert("Delete All Downloads?", isPresented: $showDeleteAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Delete All", role: .destructive) {
+                deleteAllDownloads()
             }
-            .alert("Delete All Downloads?", isPresented: $showDeleteAlert) {
-                Button("Cancel", role: .cancel) { }
-                Button("Delete All", role: .destructive) {
-                    deleteAllDownloads()
-                }
-            } message: {
-                Text("This will remove all offline music from your device. You can re-download albums anytime.")
-            }
-            .task {
-                await loadDownloads()
-            }
-            .refreshable {
-                await loadDownloads()
-            }
+        } message: {
+            Text("This will remove all offline music from your device. You can re-download albums anytime.")
+        }
+        .task {
+            await loadDownloads()
+        }
+        .refreshable {
+            await loadDownloads()
         }
     }
     
@@ -287,7 +286,22 @@ struct DownloadedAlbumCell: View {
     }
 }
 
+// MARK: - Preview Logic
 #Preview {
-    DownloadsView()
-        .environment(MusicEnvironment(repo: MusicRepository(db: MusicDatabase()), sync: SyncManager(repo: MusicRepository(db: MusicDatabase()), client: NavidromeClient(), cache: CoverArtCache(client: NavidromeClient())), coverCache: CoverArtCache(client: NavidromeClient())))
+    let client = NavidromeClient()
+    let db = MusicDatabase()
+    let repo = MusicRepository(db: db)
+    let coverCache = CoverArtCache(client: client)
+    let downloadManager = DownloadManager(client: client)
+    let syncManager = SyncManager(repo: repo, client: client, cache: coverCache)
+    
+    // ✅ FIXED: Correctly initializes MusicEnvironment (4 arguments)
+    let musicEnv = MusicEnvironment(repo: repo, sync: syncManager, coverCache: coverCache, downloads: downloadManager)
+    let downloadEnv = DownloadEnvironment(manager: downloadManager)
+    let router = Router()
+    
+    return DownloadsView()
+        .environment(musicEnv)
+        .environment(downloadEnv)
+        .environment(router)
 }

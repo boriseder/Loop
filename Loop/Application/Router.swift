@@ -2,7 +2,7 @@
 //  Router.swift
 //  Loop
 //
-//  Navigation router - unchanged, already correct
+//  FIXED: Added downloads destination
 //
 
 import SwiftUI
@@ -16,7 +16,8 @@ final class Router {
     enum Destination: Hashable, Codable {
         case albumDetail(albumId: String)
         case artistDetail(artistId: String)
-        case genreDetail(genreName: String)
+        case genreDetail(genreName: String, showDownloadedOnly: Bool)
+        case downloads // ✅ NEW destination
     }
     
     func navigateToAlbum(_ id: String) {
@@ -27,8 +28,13 @@ final class Router {
         path.append(Destination.artistDetail(artistId: id))
     }
     
-    func navigateToGenre(_ name: String) {
-        path.append(Destination.genreDetail(genreName: name))
+    func navigateToGenre(_ name: String, showDownloadedOnly: Bool = false) {
+        path.append(Destination.genreDetail(genreName: name, showDownloadedOnly: showDownloadedOnly))
+    }
+    
+    // ✅ NEW navigation function
+    func navigateToDownloads() {
+        path.append(Destination.downloads)
     }
     
     func popToRoot() {

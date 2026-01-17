@@ -2,7 +2,7 @@
 //  MusicRepository.swift
 //  Loop
 //
-//  FIXED: Removed RAM Cache to solve Race Condition. Direct DB access.
+//  FIXED: Added Artist Cache to transaction to ensure Artists are linked correctly.
 //
 
 import Foundation
@@ -18,18 +18,16 @@ final class MusicRepository: Sendable {
         self.modelContainer = db.container
     }
     
-    // MARK: - Direct DB Reads (Offline-First)
+    // MARK: - Direct DB Reads
     
     nonisolated func getAlbums(offset: Int = 0, limit: Int = 100) async throws -> [AlbumDTO] {
         try await withCancellationCheck {
             let context = ModelContext(modelContainer)
-            // Sorting is handled by SQLite (Fast)
             var descriptor = FetchDescriptor<Loop.Album>(
                 sortBy: [SortDescriptor(\.title, comparator: .localizedStandard)]
             )
             descriptor.fetchOffset = offset
             descriptor.fetchLimit = limit
-            
             return try context.fetch(descriptor).map { AlbumDTO(from: $0) }
         }
     }
@@ -37,6 +35,10 @@ final class MusicRepository: Sendable {
     nonisolated func getArtists(offset: Int = 0, limit: Int = 100) async throws -> [ArtistDTO] {
         try await withCancellationCheck {
             let context = ModelContext(modelContainer)
+            // Debug print to see what the DB actually has
+            let count = try? context.fetchCount(FetchDescriptor<Loop.Artist>())
+            print("🔍 DEBUG: DB Artist Count: \(count ?? -1)")
+            
             var descriptor = FetchDescriptor<Loop.Artist>(
                 sortBy: [SortDescriptor(\.name, comparator: .localizedStandard)]
             )
@@ -63,7 +65,6 @@ final class MusicRepository: Sendable {
             let predicate = #Predicate<Loop.Album> { $0.id == id }
             var descriptor = FetchDescriptor<Loop.Album>(predicate: predicate)
             descriptor.fetchLimit = 1
-            
             guard let album = try context.fetch(descriptor).first else { return nil }
             return AlbumDTO(from: album)
         }
@@ -75,7 +76,6 @@ final class MusicRepository: Sendable {
             let predicate = #Predicate<Loop.Artist> { $0.id == id }
             var descriptor = FetchDescriptor<Loop.Artist>(predicate: predicate)
             descriptor.fetchLimit = 1
-            
             guard let artist = try context.fetch(descriptor).first else { return nil }
             return ArtistDTO(from: artist)
         }
@@ -99,7 +99,6 @@ final class MusicRepository: Sendable {
             let descriptor = FetchDescriptor<Loop.Album>(
                 sortBy: [SortDescriptor(\.title)]
             )
-            // Filter in memory for genre to avoid complex predicate crashes
             let all = try context.fetch(descriptor)
             return all.filter { $0.genre == genre }.map { AlbumDTO(from: $0) }
         }
@@ -123,7 +122,6 @@ final class MusicRepository: Sendable {
             let predicate = #Predicate<Loop.Song> { $0.id == id }
             var descriptor = FetchDescriptor<Loop.Song>(predicate: predicate)
             descriptor.fetchLimit = 1
-            
             guard let song = try context.fetch(descriptor).first else { return nil }
             return SongDTO(from: song)
         }
@@ -136,19 +134,16 @@ final class MusicRepository: Sendable {
         return try await withCancellationCheck {
             let context = ModelContext(modelContainer)
             
-            // Albums
             let albumPred = #Predicate<Loop.Album> { $0.title.localizedStandardContains(cleanQuery) }
             var albumDesc = FetchDescriptor<Loop.Album>(predicate: albumPred, sortBy: [SortDescriptor(\.title)])
             albumDesc.fetchLimit = 10
             let albums = try context.fetch(albumDesc).map { AlbumDTO(from: $0) }
             
-            // Artists
             let artistPred = #Predicate<Loop.Artist> { $0.name.localizedStandardContains(cleanQuery) }
             var artistDesc = FetchDescriptor<Loop.Artist>(predicate: artistPred, sortBy: [SortDescriptor(\.name)])
             artistDesc.fetchLimit = 5
             let artists = try context.fetch(artistDesc).map { ArtistDTO(from: $0) }
             
-            // Songs
             let songPred = #Predicate<Loop.Song> { $0.title.localizedStandardContains(cleanQuery) }
             var songDesc = FetchDescriptor<Loop.Song>(predicate: songPred)
             songDesc.fetchLimit = 20
@@ -163,8 +158,11 @@ final class MusicRepository: Sendable {
     nonisolated func saveAlbums(_ remoteAlbums: [RemoteAlbum]) async throws {
         try await withCancellationCheck {
             let context = ModelContext(modelContainer)
+            // ✅ CACHE: Keeps track of artists created in this transaction
+            var artistCache: [String: Loop.Artist] = [:]
+            
             for remote in remoteAlbums {
-                try saveOrUpdateAlbum(remote, in: context)
+                try saveOrUpdateAlbum(remote, in: context, artistCache: &artistCache)
             }
             try context.save()
         }
@@ -173,7 +171,10 @@ final class MusicRepository: Sendable {
     nonisolated func saveAlbumDetails(album: RemoteAlbumDetail, songs: [RemoteSong]) async throws {
         try await withCancellationCheck {
             let context = ModelContext(modelContainer)
-            let artist = try getOrCreateArtist(id: album.artistId, name: album.artist, in: context)
+            // Small scope, cache not strictly needed but good for consistency
+            var artistCache: [String: Loop.Artist] = [:]
+            
+            let artist = try getOrCreateArtist(id: album.artistId, name: album.artist, in: context, cache: &artistCache)
             let albumEntity = try getOrCreateAlbum(id: album.id, from: album, artist: artist, in: context)
             albumEntity.coverArtId = album.coverArt
             
@@ -207,18 +208,24 @@ final class MusicRepository: Sendable {
     
     // MARK: - Private Helpers
     
-    private func saveOrUpdateAlbum(_ remote: RemoteAlbum, in context: ModelContext) throws {
+    private func saveOrUpdateAlbum(_ remote: RemoteAlbum, in context: ModelContext, artistCache: inout [String: Loop.Artist]) throws {
         let albumId = remote.id
         let predicate = #Predicate<Loop.Album> { $0.id == albumId }
         var descriptor = FetchDescriptor<Loop.Album>(predicate: predicate)
         descriptor.fetchLimit = 1
         
+        // Ensure Artist Exists
+        let artist = try getOrCreateArtist(id: remote.artistId, name: remote.artist, in: context, cache: &artistCache)
+        
         if let existing = try? context.fetch(descriptor).first {
             existing.coverArtId = remote.coverArt
             existing.year = remote.year
             existing.genre = remote.genre
+            // ✅ Link Artist if missing
+            if existing.artist == nil || existing.artistId != remote.artistId {
+                existing.artist = artist
+            }
         } else {
-            let artist = try getOrCreateArtist(id: remote.artistId, name: remote.artist, in: context)
             let newAlbum = Loop.Album(
                 id: remote.id,
                 title: remote.name,
@@ -280,17 +287,27 @@ final class MusicRepository: Sendable {
         }
     }
     
-    private func getOrCreateArtist(id: String, name: String, in context: ModelContext) throws -> Loop.Artist {
+    // ✅ Updated to use Cache + Context
+    private func getOrCreateArtist(id: String, name: String, in context: ModelContext, cache: inout [String: Loop.Artist]) throws -> Loop.Artist {
+        // 1. Check Local Cache (Fastest)
+        if let cached = cache[id] {
+            return cached
+        }
+        
+        // 2. Check Database
         let predicate = #Predicate<Loop.Artist> { $0.id == id }
         var descriptor = FetchDescriptor<Loop.Artist>(predicate: predicate)
         descriptor.fetchLimit = 1
         
         if let existing = try? context.fetch(descriptor).first {
+            cache[id] = existing
             return existing
         }
         
+        // 3. Create New
         let artist = Loop.Artist(id: id, name: name)
         context.insert(artist)
+        cache[id] = artist
         return artist
     }
     

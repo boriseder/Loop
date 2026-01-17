@@ -2,30 +2,32 @@
 //  MusicDatabase.swift
 //  Loop
 //
-//  Created by Architecture Blueprint v6.3
+//  FIXED: Ensured all models (Album, Artist, Genre, Song) are in the Schema
 //
 
-import SwiftData
 import Foundation
+import SwiftData
 
-@Observable
+@MainActor
 final class MusicDatabase {
     let container: ModelContainer
     
     init() {
+        // ✅ CRITICAL: Ensure Loop.Artist is included here!
         let schema = Schema([
-            Loop.Song.self,
             Loop.Album.self,
             Loop.Artist.self,
-            Loop.Genre.self
+            Loop.Genre.self,
+            Loop.Song.self
         ])
         
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
+        let modelConfiguration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false
+        )
+        
         do {
             container = try ModelContainer(for: schema, configurations: [modelConfiguration])
-            // ✅ Disable autosave to ensure we control transactions
-            container.mainContext.autosaveEnabled = false
             print("✅ MusicDatabase: Container ready")
         } catch {
             fatalError("Could not create ModelContainer: \(error)")

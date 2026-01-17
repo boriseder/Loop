@@ -2,7 +2,7 @@
 //  LoopApp.swift
 //  Loop
 //
-//  FIXED: Splash Screen, Single NavigationStack, Global Progress
+//  FIXED: Handling for Downloads destination
 //
 
 import SwiftUI
@@ -11,21 +11,14 @@ import SwiftUI
 struct LoopApp: App {
     @State private var container = AppContainer()
     @State private var isPlayerPresented = false
-    @State private var isReady = false // Gatekeeper for initialization
     
     var body: some Scene {
         WindowGroup {
-            ZStack {
-                if isReady {
-                    if container.auth.isAuthenticated {
-                        AuthenticatedRoot()
-                            .transition(.opacity)
-                    } else {
-                        LoginView()
-                            .transition(.opacity)
-                    }
+            Group {
+                if container.auth.isAuthenticated {
+                    AuthenticatedRoot()
                 } else {
-                    SplashScreen()
+                    LoginView()
                 }
             }
             .environment(container.auth)
@@ -47,12 +40,6 @@ struct LoopApp: App {
                 }
             }
             .animation(.easeInOut, value: container.music.isSyncing)
-            .task {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                withAnimation {
-                    isReady = true
-                }
-            }
         }
     }
     
@@ -88,25 +75,10 @@ struct LoopApp: App {
             AlbumDetailView(albumId: id)
         case .artistDetail(let id):
             ArtistDetailView(artistId: id)
-        case .genreDetail(let name):
-            GenreDetailView(genreName: name)
-        }
-    }
-}
-
-struct SplashScreen: View {
-    var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VStack(spacing: 20) {
-                Image(systemName: "infinity.circle.fill")
-                    .font(.system(size: 80))
-                    .foregroundStyle(Color.accentColor)
-                    .symbolEffect(.bounce, value: true)
-                Text("Loop")
-                    .font(.largeTitle.weight(.black))
-                    .foregroundStyle(.white)
-            }
+        case .genreDetail(let name, let showDownloaded):
+            GenreDetailView(genreName: name, showDownloadedOnly: showDownloaded)
+        case .downloads: // ✅ NEW Case
+            DownloadsView()
         }
     }
 }

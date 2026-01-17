@@ -2,7 +2,7 @@
 //  LibraryViewModel.swift
 //  Loop
 //
-//  FIXED: Removed 'isLoading' deadlock that prevented data from rendering
+//  FIXED: Renamed 'recentAlbums' -> 'albums', uses Global Download State
 //
 
 import Foundation
@@ -26,13 +26,24 @@ final class LibraryViewModel {
         }
     }
     
-    var recentAlbums: [AlbumDTO] = []
+    // ✅ RENAMED: 'recentAlbums' is misleading. It's just 'albums'.
+    var albums: [AlbumDTO] = []
     var artists: [ArtistDTO] = []
     var genres: [GenreDTO] = []
     
-    var filteredAlbums: [AlbumDTO] { showDownloadedOnly ? recentAlbums.filter { isAlbumDownloaded($0) } : recentAlbums }
-    var filteredArtists: [ArtistDTO] { showDownloadedOnly ? artists.filter { hasDownloadedAlbums(artistId: $0.id) } : artists }
-    var filteredGenres: [GenreDTO] { showDownloadedOnly ? genres.filter { hasDownloadedAlbums(genre: $0.name) } : genres }
+    // ✅ FILTERED: Uses Global State from 'music' environment directly
+    // This ensures that if the state updates anywhere in the app, this view updates instantly.
+    var filteredAlbums: [AlbumDTO] {
+        showDownloadedOnly ? albums.filter { music.downloadedAlbumIds.contains($0.id) } : albums
+    }
+    
+    var filteredArtists: [ArtistDTO] {
+        showDownloadedOnly ? artists.filter { music.downloadedArtistIds.contains($0.id) } : artists
+    }
+    
+    var filteredGenres: [GenreDTO] {
+        showDownloadedOnly ? genres.filter { music.downloadedGenres.contains($0.name) } : genres
+    }
     
     var isLoading = false
     var statusMessage: String?
@@ -45,72 +56,34 @@ final class LibraryViewModel {
     private let music: MusicEnvironment
     private let downloads: DownloadEnvironment
     
-    private var downloadedAlbumIds: Set<String> = []
-    
     init(music: MusicEnvironment, downloads: DownloadEnvironment) {
         self.music = music
         self.downloads = downloads
     }
     
     func loadInitialData() async {
-        // ❌ REMOVED: isLoading = true
-        // (This was causing the deadlock because loadCurrentScope checks this flag and aborts)
-        
         // 1. Try to load existing data from DB
         await loadCurrentScope()
-        await updateDownloadedAlbums()
         
-        // 2. Only force sync if DB is TRULY empty
-        if recentAlbums.isEmpty && artists.isEmpty && genres.isEmpty {
+        // 2. Refresh Global Download State (scans the disk)
+        await music.updateDownloadedState()
+        
+        // 3. Only force sync if DB is TRULY empty
+        if albums.isEmpty && artists.isEmpty && genres.isEmpty {
             print("⚠️ DB is empty. Triggering Force Sync.")
             statusMessage = "First launch - downloading library..."
             await refresh(force: true)
         } else {
-            print("✅ Loaded \(recentAlbums.count) albums from local DB")
+            print("✅ Loaded \(albums.count) albums from local DB")
         }
     }
     
     func updateFilter(downloadedOnly: Bool) async {
         showDownloadedOnly = downloadedOnly
-        await updateDownloadedAlbums()
-    }
-    
-    private func updateDownloadedAlbums() async {
-        let currentScopeAlbums = recentAlbums
-        let storage = downloads.storage
-        
-        let newDownloadedIds = await Task.detached(priority: .userInitiated) { [music, storage, currentScopeAlbums] in
-            var ids = Set<String>()
-            
-            await withTaskGroup(of: (String, Bool).self) { group in
-                for album in currentScopeAlbums {
-                    group.addTask {
-                        guard let songs = try? await music.getSongs(for: album.id) else { return (album.id, false) }
-                        let isDown = storage.isAlbumFullyDownloaded(songIds: songs.map(\.id))
-                        return (album.id, isDown)
-                    }
-                }
-                
-                for await (id, isDown) in group {
-                    if isDown { ids.insert(id) }
-                }
-            }
-            return ids
-        }.value
-        
-        self.downloadedAlbumIds = newDownloadedIds
-    }
-    
-    private func isAlbumDownloaded(_ album: AlbumDTO) -> Bool {
-        downloadedAlbumIds.contains(album.id)
-    }
-    
-    private func hasDownloadedAlbums(artistId: String) -> Bool {
-        recentAlbums.contains { $0.artistId == artistId && downloadedAlbumIds.contains($0.id) }
-    }
-    
-    private func hasDownloadedAlbums(genre: String) -> Bool {
-        recentAlbums.contains { $0.genre == genre && downloadedAlbumIds.contains($0.id) }
+        if downloadedOnly {
+            // Trigger a fresh scan when filter is enabled to be sure
+            await music.updateDownloadedState()
+        }
     }
     
     func refresh(force: Bool = false) async {
@@ -120,8 +93,9 @@ final class LibraryViewModel {
             
             // 3. Reload data after sync
             resetPagination()
-            await loadCurrentScope() // This will now work because isLoading is managed correctly
-            await updateDownloadedAlbums()
+            await loadCurrentScope()
+            // Update global state after sync potentially brought in new files/metadata
+            await music.updateDownloadedState()
             
             statusMessage = "✅ Ready"
             try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -145,13 +119,12 @@ final class LibraryViewModel {
         do {
             switch scope {
             case .recent:
-                // Direct DB read (Fast)
                 let newAlbums = try await music.getAlbums(offset: currentOffset, limit: pageSize)
                 
                 if append {
-                    recentAlbums.append(contentsOf: newAlbums)
+                    albums.append(contentsOf: newAlbums)
                 } else {
-                    recentAlbums = newAlbums
+                    albums = newAlbums
                 }
                 canLoadMore = newAlbums.count == pageSize
                 
