@@ -2,7 +2,7 @@
 //  SyncManager.swift
 //  Loop
 //
-//  FIXED: Swift 6 concurrency warnings - nonisolated decode
+//  FIXED: Logger interpolation error resolved
 //
 
 import Foundation
@@ -24,7 +24,6 @@ actor SyncManager {
     private var isSyncing = false
     private var syncTask: Task<Void, Error>?
     
-    // ✅ NEW: Track if full sync has been completed
     private var hasCompletedFullSync = false
     
     private var progressCallback: (@Sendable @MainActor (SyncProgress) -> Void)?
@@ -33,8 +32,6 @@ actor SyncManager {
         self.repo = repo
         self.client = client
         self.cache = cache
-        
-        // Check if we've already synced
         hasCompletedFullSync = UserDefaults.standard.bool(forKey: "loop.sync.completed")
     }
     
@@ -42,9 +39,8 @@ actor SyncManager {
         self.progressCallback = callback
     }
     
-    func performSmartSync() async throws {
-        // ✅ FIXED: Skip if already fully synced
-        if hasCompletedFullSync {
+    func performSmartSync(force: Bool = false) async throws {
+        if !force && hasCompletedFullSync {
             logger.info("⏭️ Full sync already completed, skipping")
             return
         }
@@ -58,7 +54,8 @@ actor SyncManager {
         isSyncing = true
         defer { isSyncing = false }
         
-        logger.info("🔄 Starting FULL offline sync")
+        // ✅ FIXED: String interpolation
+        logger.info("\(force ? "⚠️ FORCE Sync requested" : "🔄 Starting FULL offline sync")")
         
         syncTask = Task {
             var offset = 0
@@ -99,9 +96,8 @@ actor SyncManager {
         
         do {
             try await syncTask?.value
-            logger.info("✅ FULL offline sync complete - app is ready for offline use")
+            logger.info("✅ FULL offline sync complete")
             
-            // ✅ Mark sync as completed
             hasCompletedFullSync = true
             UserDefaults.standard.set(true, forKey: "loop.sync.completed")
             
@@ -121,11 +117,9 @@ actor SyncManager {
         syncTask = nil
     }
     
-    // ✅ FIXED: Make these nonisolated to avoid actor context
     private nonisolated func syncAlbumPage(type: String, offset: Int, size: Int) async throws -> Int {
         let params = ["type": type, "offset": String(offset), "size": String(size)]
         
-        // Fetch happens in Task to break isolation
         let albums = try await Task {
             let response: SubsonicResponse = try await client.fetch("getAlbumList2", params: params)
             return response.subsonicResponse.albumList2?.album
@@ -152,75 +146,44 @@ actor SyncManager {
             return (response.subsonicResponse.album, response.subsonicResponse.album?.song)
         }.value
         
-        guard let details, let remoteSongs else {
-            throw SyncError.invalidResponse
-        }
-        
+        guard let details, let remoteSongs else { throw SyncError.invalidResponse }
         try await repo.saveAlbumDetails(album: details, songs: remoteSongs)
         
         if let coverId = details.coverArt {
-            Task {
-                await cache.downloadCover(id: coverId)
-            }
+            Task { await cache.downloadCover(id: coverId) }
         }
     }
     
     private func downloadAllCovers(totalAlbums: Int) async {
-        logger.info("🖼️ Starting FULL cover download for offline use...")
-        
         do {
             var allAlbums: [AlbumDTO] = []
             var offset = 0
             let pageSize = 500
             var hasMore = true
-            
             while hasMore {
                 let batch = try await repo.getAlbums(offset: offset, limit: pageSize)
                 allAlbums.append(contentsOf: batch)
-                
-                if batch.count < pageSize {
-                    hasMore = false
-                } else {
-                    offset += pageSize
-                }
+                if batch.count < pageSize { hasMore = false } else { offset += pageSize }
             }
-            
             let albumsWithCovers = allAlbums.filter { $0.coverArtId != nil }
-            logger.info("Found \(albumsWithCovers.count) albums with covers - downloading ALL")
-            
             await withTaskGroup(of: Void.self) { group in
                 var downloaded = 0
                 let maxConcurrent = 10
                 var activeCount = 0
-                
                 for album in albumsWithCovers {
                     guard let coverId = album.coverArtId else { continue }
-                    
                     if activeCount >= maxConcurrent {
                         await group.next()
                         activeCount -= 1
                         downloaded += 1
-                        
                         if downloaded % 10 == 0 {
                             await reportProgress(.covers(current: downloaded, total: albumsWithCovers.count))
                         }
                     }
-                    
-                    group.addTask {
-                        await self.cache.downloadCover(id: coverId, size: 300)
-                    }
+                    group.addTask { await self.cache.downloadCover(id: coverId, size: 300) }
                     activeCount += 1
                 }
-                
-                while activeCount > 0 {
-                    await group.next()
-                    activeCount -= 1
-                    downloaded += 1
-                }
-                
-                logger.info("✅ Downloaded ALL \(downloaded) covers - app is fully offline ready")
             }
-            
         } catch {
             logger.error("Cover download failed: \(error)")
         }
@@ -228,8 +191,6 @@ actor SyncManager {
     
     private func reportProgress(_ phase: SyncProgress.Phase) async {
         let progress = SyncProgress(phase: phase)
-        if let callback = progressCallback {
-            await callback(progress)
-        }
+        if let callback = progressCallback { await callback(progress) }
     }
 }

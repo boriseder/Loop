@@ -2,7 +2,7 @@
 //  LibraryView.swift
 //  Loop
 //
-//  FIXED: Toolbar menu for search/settings/downloads filter, auto-load on appear
+//  OPTIMIZED: High-performance scrolling (Removed staggering & enumeration)
 //
 
 import SwiftUI
@@ -10,14 +10,14 @@ import SwiftUI
 struct LibraryView: View {
     @Environment(MusicEnvironment.self) private var music
     @Environment(DownloadEnvironment.self) private var downloads
-    @Environment(Router.self) private var router
     @State private var viewModel: LibraryViewModel?
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var showDownloadedOnly = false
     
+    // Fixed column size is more performant than adaptive for images
     private let columns = [
-        GridItem(.adaptive(minimum: 150, maximum: 180), spacing: 16)
+        GridItem(.adaptive(minimum: 160, maximum: 180), spacing: 16)
     ]
     
     var body: some View {
@@ -25,20 +25,7 @@ struct LibraryView: View {
             if let vm = viewModel {
                 mainContent(vm)
             } else {
-                // ✅ Show skeleton while ViewModel initializes
-                VStack(spacing: 0) {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
-                            ForEach(0..<3, id: \.self) { _ in
-                                Capsule()
-                                    .fill(Color.secondary.opacity(0.2))
-                                    .frame(width: 100, height: 36)
-                            }
-                        }
-                        .padding()
-                    }
-                    AlbumGridSkeleton()
-                }
+                loadingView
             }
         }
         .onAppear {
@@ -47,16 +34,17 @@ struct LibraryView: View {
             }
         }
         .task {
-            // ✅ INSTANT load from cache
             if let vm = viewModel {
                 await vm.loadInitialData()
             }
         }
-        .sheet(isPresented: $showSearch) {
-            SearchView()
-        }
-        .sheet(isPresented: $showSettings) {
-            SettingsView()
+        .sheet(isPresented: $showSearch) { SearchView() }
+        .sheet(isPresented: $showSettings) { SettingsView() }
+    }
+    
+    private var loadingView: some View {
+        VStack {
+            AlbumGridSkeleton()
         }
     }
     
@@ -74,64 +62,37 @@ struct LibraryView: View {
             }
             .background(Material.regular)
             
-            // Content
+            // Main Content
             ScrollView {
-                // ✅ Show skeleton ONLY if loading and empty
-                if vm.isLoading && vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty && vm.filteredGenres.isEmpty {
-                    if vm.scope == .recent {
-                        AlbumGridSkeleton()
-                    } else if vm.scope == .artists {
-                        ListSkeletonView()
-                    } else {
-                        AlbumGridSkeleton()
-                    }
-                } else if !vm.isLoading && vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty && vm.filteredGenres.isEmpty {
-                    ContentUnavailableView(
-                        "No Music Yet",
-                        systemImage: "music.note.list",
-                        description: Text("Pull to refresh to sync your library from the server")
-                    )
-                    .padding(.top, 60)
+                // Optimization: Simple check avoids View tree complexity
+                if vm.isLoading && vm.filteredAlbums.isEmpty {
+                    AlbumGridSkeleton()
+                } else if vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty && vm.filteredGenres.isEmpty {
+                    ContentUnavailableView("No Music", systemImage: "music.note", description: Text("Library is empty"))
+                        .padding(.top, 50)
                 } else {
                     contentGrid(vm)
                         .padding()
                 }
             }
-            .refreshable {
-                await vm.refresh()
-            }
+            .refreshable { await vm.refresh() }
         }
         .navigationTitle("Library")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
-                    Button {
-                        showSearch = true
-                    } label: {
-                        Label("Search", systemImage: "magnifyingglass")
-                    }
-                    
-                    Button {
-                        showSettings = true
-                    } label: {
-                        Label("Settings", systemImage: "gear")
-                    }
-                    
+                    Button { showSearch = true } label: { Label("Search", systemImage: "magnifyingglass") }
+                    Button { showSettings = true } label: { Label("Settings", systemImage: "gear") }
                     Divider()
-                    
-                    Toggle(isOn: $showDownloadedOnly) {
-                        Label("Downloaded Only", systemImage: "arrow.down.circle")
-                    }
+                    Toggle(isOn: $showDownloadedOnly) { Label("Downloaded Only", systemImage: "arrow.down.circle") }
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
                 }
             }
         }
         .onChange(of: showDownloadedOnly) { _, newValue in
-            Task {
-                await viewModel?.updateFilter(downloadedOnly: newValue)
-            }
+            Task { await viewModel?.updateFilter(downloadedOnly: newValue) }
         }
         .overlay(alignment: .bottom) {
             if let msg = vm.statusMessage {
@@ -141,7 +102,6 @@ struct LibraryView: View {
                     .background(.ultraThinMaterial)
                     .clipShape(Capsule())
                     .padding(.bottom, 80)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
     }
@@ -166,14 +126,16 @@ struct LibraryView: View {
         switch vm.scope {
         case .recent:
             LazyVGrid(columns: columns, spacing: 20) {
-                ForEach(Array(vm.filteredAlbums.enumerated()), id: \.element.id) { index, album in
+                // OPTIMIZED: Direct iteration, no Array creation, no Enumeration
+                ForEach(vm.filteredAlbums) { album in
                     NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
                         AlbumCell(album: album)
                     }
                     .buttonStyle(.plain)
-                    .staggeredAppear(index: index)
+                    // REMOVED: .staggeredAppear (Major lag cause)
                     .task {
-                        if album.id == vm.recentAlbums.last?.id {
+                        // Prefetch logic
+                        if album.id == vm.filteredAlbums.last?.id {
                             await vm.loadMore()
                         }
                     }
@@ -182,15 +144,12 @@ struct LibraryView: View {
             
         case .artists:
             LazyVStack(spacing: 0) {
-                ForEach(Array(vm.filteredArtists.enumerated()), id: \.element.id) { index, artist in
+                ForEach(vm.filteredArtists) { artist in
                     NavigationLink(value: Router.Destination.artistDetail(artistId: artist.id)) {
                         HStack {
-                            Text(artist.name)
-                                .font(.body)
+                            Text(artist.name).font(.body)
                             Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary)
                         }
                         .padding()
                         .background(Color.secondary.opacity(0.05))
@@ -198,9 +157,8 @@ struct LibraryView: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 8)
-                    .staggeredAppear(index: index)
                     .task {
-                        if artist.id == vm.artists.last?.id {
+                        if artist.id == vm.filteredArtists.last?.id {
                             await vm.loadMore()
                         }
                     }
@@ -209,7 +167,7 @@ struct LibraryView: View {
             
         case .genres:
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)]) {
-                ForEach(Array(vm.filteredGenres.enumerated()), id: \.element.id) { index, genre in
+                ForEach(vm.filteredGenres) { genre in
                     NavigationLink(value: Router.Destination.genreDetail(genreName: genre.name)) {
                         VStack(spacing: 8) {
                             Text(genre.name)
@@ -217,27 +175,23 @@ struct LibraryView: View {
                                 .lineLimit(2)
                                 .multilineTextAlignment(.center)
                                 .frame(minHeight: 44)
-                            
                             Text("\(genre.albumCount) albums")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 100)
+                        .frame(maxWidth: .infinity, minHeight: 100)
                         .padding()
                         .background(Color.secondary.opacity(0.1))
                         .cornerRadius(12)
                     }
                     .buttonStyle(.plain)
-                    .staggeredAppear(index: index)
                 }
             }
         }
     }
 }
 
-// MARK: - Album Cell Component
-
+// MARK: - Optimized Album Cell
 struct AlbumCell: View {
     let album: AlbumDTO
     @Environment(MusicEnvironment.self) private var music
@@ -245,43 +199,41 @@ struct AlbumCell: View {
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Group {
+            ZStack {
                 if let image = coverImage {
                     Image(uiImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
+                        .transition(.opacity.animation(.easeOut(duration: 0.2)))
                 } else {
-                    placeholderView
+                    Color.secondary.opacity(0.1)
+                    Image(systemName: "music.note")
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary.opacity(0.5))
                 }
             }
-            .frame(width: 180, height: 180)
-            .background(Color.secondary.opacity(0.1))
+            .frame(width: 160, height: 160) // Fixed size is faster for layout
             .clipShape(RoundedRectangle(cornerRadius: 12))
-            .shadow(radius: 4)
             
-            Text(album.title)
-                .font(.headline)
-                .lineLimit(1)
-                .foregroundStyle(.primary)
-            
-            Text(album.artistName ?? "Unknown")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .task(id: album.coverArtId) {
-            if let coverId = album.coverArtId {
-                coverImage = await music.getCoverImage(for: coverId, size: 360)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(album.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                
+                Text(album.artistName ?? "Unknown")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
         }
-    }
-    
-    private var placeholderView: some View {
-        ZStack {
-            Color.secondary.opacity(0.1)
-            Image(systemName: "music.note")
-                .font(.system(size: 60))
-                .foregroundStyle(.secondary)
+        .contentShape(Rectangle()) // Improves hit testing performance
+        .task(id: album.coverArtId) {
+            // Load image only when visible
+            if let coverId = album.coverArtId {
+                // Logic is handled by Actor, safe for main thread
+                coverImage = await music.getCoverImage(for: coverId, size: 300)
+            }
         }
     }
 }

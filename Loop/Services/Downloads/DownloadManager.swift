@@ -2,7 +2,7 @@
 //  DownloadManager.swift
 //  Loop
 //
-//  FIXED: Proper concurrency, cancellation, network-aware downloading
+//  FIXED: Decoupled Storage logic (Thread-Safe) from Manager logic
 //
 
 import Foundation
@@ -10,26 +10,66 @@ import Observation
 import OSLog
 import Network
 
+// MARK: - Storage Strategy (Thread Safe)
+// This struct handles all File I/O paths and checks. It is Sendable and Non-Isolated.
+struct DownloadStorage: Sendable {
+    private let fileManager = FileManager.default
+    
+    var musicDirectory: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Music")
+    }
+    
+    func createDirectories() {
+        try? fileManager.createDirectory(at: musicDirectory, withIntermediateDirectories: true)
+    }
+    
+    func localFileURL(for songId: String) -> URL {
+        musicDirectory.appendingPathComponent("\(songId).mp3")
+    }
+    
+    func isSongDownloaded(id: String) -> Bool {
+        fileManager.fileExists(atPath: localFileURL(for: id).path)
+    }
+    
+    func isAlbumFullyDownloaded(songIds: [String]) -> Bool {
+        guard !songIds.isEmpty else { return false }
+        return songIds.allSatisfy { isSongDownloaded(id: $0) }
+    }
+    
+    func getTotalDownloadSize() -> Int64 {
+        guard let files = try? fileManager.contentsOfDirectory(
+            at: musicDirectory,
+            includingPropertiesForKeys: [.fileSizeKey]
+        ) else { return 0 }
+        
+        return files.reduce(0) { result, url in
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            return result + Int64(size)
+        }
+    }
+}
+
+// MARK: - Manager (Stateful)
+
 @Observable @MainActor
 final class DownloadManager {
     
     private(set) var activeDownloads: Set<String> = []
     
-    private let client: NavidromeClient
-    private let fileManager = FileManager.default
-    private let logger = Logger(subsystem: "com.loopapp", category: "Downloads")
+    // ✅ Public Accessor for Thread-Safe Storage Logic
+    nonisolated let storage = DownloadStorage()
     
-    // Network monitoring
+    private let client: NavidromeClient
+    private let logger = Logger(subsystem: "com.loopapp", category: "Downloads")
     private let networkMonitor = NWPathMonitor()
     private var isOnWiFi = false
-    private var isOnCellular = false
     
-    // Download tasks (for cancellation)
     private var downloadTasks: [String: Task<Void, Never>] = [:]
     
     init(client: NavidromeClient) {
         self.client = client
-        createDirectories()
+        storage.createDirectories()
         setupNetworkMonitoring()
     }
     
@@ -37,96 +77,50 @@ final class DownloadManager {
         networkMonitor.cancel()
     }
     
-    // MARK: - Paths
+    // MARK: - Delegates to Storage (Non-Isolated)
     
-    private var musicDirectory: URL {
-        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Music")
+    nonisolated func isAlbumFullyDownloaded(songIds: [String]) -> Bool {
+        storage.isAlbumFullyDownloaded(songIds: songIds)
     }
     
-    private func createDirectories() {
-        try? fileManager.createDirectory(at: musicDirectory, withIntermediateDirectories: true)
+    nonisolated func isPinned(songId: String) -> Bool {
+        storage.isSongDownloaded(id: songId)
     }
     
-    func localFileURL(for songId: String) -> URL? {
-        musicDirectory.appendingPathComponent("\(songId).mp3")
+    nonisolated func localFileURL(for songId: String) -> URL? {
+        storage.localFileURL(for: songId)
     }
     
-    // MARK: - Network Monitoring
-    
-    private func setupNetworkMonitoring() {
-        networkMonitor.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor [weak self] in
-                self?.isOnWiFi = path.usesInterfaceType(.wifi)
-                self?.isOnCellular = path.usesInterfaceType(.cellular)
-            }
-        }
-        networkMonitor.start(queue: DispatchQueue(label: "NetworkMonitor"))
-    }
-    
-    private var shouldAllowDownload: Bool {
-        // For now, only allow on WiFi (can be made configurable)
-        return isOnWiFi
-    }
-    
-    // MARK: - Status Checks
-    
-    func isPinned(songId: String) -> Bool {
-        guard let url = localFileURL(for: songId) else { return false }
-        return fileManager.fileExists(atPath: url.path)
-    }
-    
-    func isAlbumFullyDownloaded(songIds: [String]) -> Bool {
-        guard !songIds.isEmpty else { return false }
-        return songIds.allSatisfy { isPinned(songId: $0) }
-    }
+    // MARK: - Main Actor State
     
     func isDownloading(albumId: String) -> Bool {
         activeDownloads.contains(albumId)
     }
     
-    // MARK: - Download Actions
+    // MARK: - Actions
     
     func downloadSong(id: String, path: String, coverId: String?) async {
-        guard let url = localFileURL(for: id) else { return }
+        let url = storage.localFileURL(for: id)
         
-        // Skip if exists
-        if fileManager.fileExists(atPath: url.path) {
-            return
-        }
+        if FileManager.default.fileExists(atPath: url.path) { return }
         
-        // Check network
-        guard shouldAllowDownload else {
+        guard isOnWiFi else {
             logger.warning("Download blocked: not on WiFi")
             return
         }
         
-        // Mark as downloading
         activeDownloads.insert(id)
         defer { activeDownloads.remove(id) }
         
-        logger.info("⬇️ Downloading song: \(id)")
-        
         let task = Task {
             do {
-                try Task.checkCancellation()
-                
-                guard let streamURL = await client.streamURL(for: id) else {
-                    throw DownloadError.invalidURL
-                }
-                
+                guard let streamURL = await client.streamURL(for: id) else { throw DownloadError.invalidURL }
                 let data = try await client.downloadData(from: streamURL)
-                
-                try Task.checkCancellation()
                 try data.write(to: url)
-                
-                logger.info("✅ Saved song: \(id)")
-            } catch is CancellationError {
-                logger.info("Download cancelled: \(id)")
-                try? fileManager.removeItem(at: url) // Cleanup partial
+                logger.info("✅ Saved: \(id)")
             } catch {
-                logger.error("❌ Failed to download: \(error)")
-                try? fileManager.removeItem(at: url) // Cleanup partial
+                logger.error("Download failed: \(error)")
+                try? FileManager.default.removeItem(at: url)
             }
         }
         
@@ -139,77 +133,33 @@ final class DownloadManager {
         activeDownloads.insert(albumId)
         defer { activeDownloads.remove(albumId) }
         
-        // Download with concurrency limit
         await withTaskGroup(of: Void.self) { group in
-            var activeCount = 0
             let maxConcurrent = isOnWiFi ? 3 : 1
-            
+            var active = 0
             for song in songs {
-                // Wait if at capacity
-                if activeCount >= maxConcurrent {
-                    await group.next()
-                    activeCount -= 1
-                }
-                
-                group.addTask {
-                    await self.downloadSong(id: song.id, path: song.path, coverId: song.coverId)
-                }
-                activeCount += 1
+                if active >= maxConcurrent { await group.next(); active -= 1 }
+                group.addTask { await self.downloadSong(id: song.id, path: song.path, coverId: song.coverId) }
+                active += 1
             }
         }
     }
     
     func deleteDownload(songId: String) {
-        // Cancel ongoing download
-        if let task = downloadTasks[songId] {
-            task.cancel()
-            downloadTasks.removeValue(forKey: songId)
-        }
-        
-        // Delete file
-        if let url = localFileURL(for: songId) {
-            try? fileManager.removeItem(at: url)
-            logger.info("🗑️ Deleted song: \(songId)")
-        }
+        downloadTasks[songId]?.cancel()
+        let url = storage.localFileURL(for: songId)
+        try? FileManager.default.removeItem(at: url)
     }
     
-    func cancelDownload(albumId: String) {
-        activeDownloads.remove(albumId)
-        
-        // Cancel all tasks for this album
-        // (In real implementation, track per-album tasks)
-        logger.info("Cancelled album download: \(albumId)")
-    }
-    
-    func getTotalDownloadSize() async -> Int64 {
-        var totalSize: Int64 = 0
-        
-        guard let files = try? fileManager.contentsOfDirectory(
-            at: musicDirectory,
-            includingPropertiesForKeys: [.fileSizeKey]
-        ) else { return 0 }
-        
-        for fileURL in files {
-            if let resourceValues = try? fileURL.resourceValues(forKeys: [.fileSizeKey]),
-               let size = resourceValues.fileSize {
-                totalSize += Int64(size)
+    private func setupNetworkMonitoring() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor [weak self] in
+                self?.isOnWiFi = path.usesInterfaceType(.wifi)
             }
         }
-        
-        return totalSize
+        networkMonitor.start(queue: DispatchQueue(label: "NetworkMonitor"))
     }
 }
 
 enum DownloadError: LocalizedError {
     case invalidURL
-    case networkUnavailable
-    case fileWriteFailed
-    
-    var errorDescription: String? {
-        switch self {
-        case .invalidURL: return "Invalid download URL"
-        case .networkUnavailable: return "Network unavailable"
-        case .fileWriteFailed: return "Failed to write file"
-        }
-    }
 }

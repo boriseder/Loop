@@ -2,29 +2,26 @@
 //  AppContainer.swift
 //  Loop
 //
-//  FIXED: Added sync progress tracking
+//  FIXED: DownloadEnvironment exposes thread-safe storage
 //
 
 import Foundation
 import SwiftUI
 import Observation
 
-// MARK: - Main Container (Only for initialization)
+// MARK: - Main Container
 
 final class AppContainer {
     
-    // Core Services (kept private, exposed via focused containers)
     private let client: NavidromeClient
     private let db: MusicDatabase
     private let repo: MusicRepository
     
-    // Public Environment Objects (Granular)
     let auth: AuthEnvironment
     let music: MusicEnvironment
     let playback: PlaybackEnvironment
     let downloads: DownloadEnvironment
     
-    // Navigation
     var router = Router()
     
     init() {
@@ -49,7 +46,6 @@ final class AppContainer {
         self.db = db
         self.repo = repo
         
-        // Granular environments
         self.auth = AuthEnvironment(service: authService)
         self.music = MusicEnvironment(repo: repo, sync: syncManager, coverCache: coverCache)
         self.playback = PlaybackEnvironment(engine: audioEngine)
@@ -85,7 +81,6 @@ final class MusicEnvironment {
     private let sync: SyncManager
     private let coverCache: CoverArtCache
     
-    // ✅ NEW: Sync progress tracking
     private(set) var syncProgress: SyncProgress = SyncProgress(phase: .idle)
     private(set) var isSyncing = false
     
@@ -94,7 +89,6 @@ final class MusicEnvironment {
         self.sync = sync
         self.coverCache = coverCache
         
-        // ✅ Setup progress callback - Fixed actor isolation
         Task { @MainActor in
             await sync.setProgressCallback { [weak self] progress in
                 self?.syncProgress = progress
@@ -103,7 +97,6 @@ final class MusicEnvironment {
         }
     }
     
-    // Read operations
     func getAlbums(offset: Int = 0, limit: Int = 100) async throws -> [AlbumDTO] {
         try await repo.getAlbums(offset: offset, limit: limit)
     }
@@ -144,9 +137,8 @@ final class MusicEnvironment {
         await coverCache.getImage(for: id, size: size)
     }
     
-    // Sync operations
-    func performSync() async throws {
-        try await sync.performSmartSync()
+    func performSync(force: Bool = false) async throws {
+        try await sync.performSmartSync(force: force)
     }
     
     func cancelSync() async {
@@ -162,7 +154,6 @@ final class MusicEnvironment {
 final class PlaybackEnvironment {
     private let engine: AudioEngine
     
-    // Exposed state (only what views need)
     var isPlaying: Bool { engine.isPlaying }
     var currentSongId: String? { engine.currentSongId }
     var currentTitle: String { engine.currentTitle }
@@ -172,7 +163,6 @@ final class PlaybackEnvironment {
     var duration: Double { engine.duration }
     var errorMessage: String? { engine.errorMessage }
     
-    // ✅ NEW: Enhanced controls
     var isShuffled: Bool { engine.isShuffled }
     var repeatMode: RepeatMode { engine.repeatMode }
     
@@ -180,36 +170,13 @@ final class PlaybackEnvironment {
         self.engine = engine
     }
     
-    func play() {
-        engine.play()
-    }
-    
-    func pause() {
-        engine.pause()
-    }
-    
-    func seek(to seconds: Double) {
-        engine.seek(to: seconds)
-    }
-    
-    func skipToNext() {
-        engine.skipToNext()
-    }
-    
-    // ✅ NEW: Previous track
-    func skipToPrevious() {
-        engine.skipToPrevious()
-    }
-    
-    // ✅ NEW: Shuffle toggle
-    func toggleShuffle() {
-        engine.toggleShuffle()
-    }
-    
-    // ✅ NEW: Repeat toggle
-    func toggleRepeat() {
-        engine.toggleRepeat()
-    }
+    func play() { engine.play() }
+    func pause() { engine.pause() }
+    func seek(to seconds: Double) { engine.seek(to: seconds) }
+    func skipToNext() { engine.skipToNext() }
+    func skipToPrevious() { engine.skipToPrevious() }
+    func toggleShuffle() { engine.toggleShuffle() }
+    func toggleRepeat() { engine.toggleRepeat() }
     
     func setupPlayer(with songId: String, queue: [String], autoPlay: Bool = true) async {
         await engine.setupPlayer(with: songId, queue: queue, autoPlay: autoPlay)
@@ -221,6 +188,9 @@ final class DownloadEnvironment {
     private let manager: DownloadManager
     
     var activeDownloads: Set<String> { manager.activeDownloads }
+    
+    // ✅ EXPOSED: storage is now visible to ViewModels
+    var storage: DownloadStorage { manager.storage }
     
     init(manager: DownloadManager) {
         self.manager = manager

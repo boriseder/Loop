@@ -2,7 +2,7 @@
 //  LibraryViewModel.swift
 //  Loop
 //
-//  FIXED: Albums sorted alphabetically A-Z
+//  FIXED: Removed 'isLoading' deadlock that prevented data from rendering
 //
 
 import Foundation
@@ -30,7 +30,6 @@ final class LibraryViewModel {
     var artists: [ArtistDTO] = []
     var genres: [GenreDTO] = []
     
-    // ✅ NEW: Filtered results for downloaded-only mode
     var filteredAlbums: [AlbumDTO] { showDownloadedOnly ? recentAlbums.filter { isAlbumDownloaded($0) } : recentAlbums }
     var filteredArtists: [ArtistDTO] { showDownloadedOnly ? artists.filter { hasDownloadedAlbums(artistId: $0.id) } : artists }
     var filteredGenres: [GenreDTO] { showDownloadedOnly ? genres.filter { hasDownloadedAlbums(genre: $0.name) } : genres }
@@ -46,7 +45,6 @@ final class LibraryViewModel {
     private let music: MusicEnvironment
     private let downloads: DownloadEnvironment
     
-    // ✅ Cache of downloaded albums
     private var downloadedAlbumIds: Set<String> = []
     
     init(music: MusicEnvironment, downloads: DownloadEnvironment) {
@@ -55,17 +53,21 @@ final class LibraryViewModel {
     }
     
     func loadInitialData() async {
-        isLoading = true
+        // ❌ REMOVED: isLoading = true
+        // (This was causing the deadlock because loadCurrentScope checks this flag and aborts)
+        
+        // 1. Try to load existing data from DB
         await loadCurrentScope()
         await updateDownloadedAlbums()
         
-        // ✅ FIXED: Only auto-sync on first launch if empty
+        // 2. Only force sync if DB is TRULY empty
         if recentAlbums.isEmpty && artists.isEmpty && genres.isEmpty {
+            print("⚠️ DB is empty. Triggering Force Sync.")
             statusMessage = "First launch - downloading library..."
-            await refresh()
+            await refresh(force: true)
+        } else {
+            print("✅ Loaded \(recentAlbums.count) albums from local DB")
         }
-        
-        isLoading = false
     }
     
     func updateFilter(downloadedOnly: Bool) async {
@@ -74,21 +76,29 @@ final class LibraryViewModel {
     }
     
     private func updateDownloadedAlbums() async {
-        // Build cache of downloaded album IDs
-        var downloaded = Set<String>()
+        let currentScopeAlbums = recentAlbums
+        let storage = downloads.storage
         
-        for album in recentAlbums {
-            do {
-                let songs = try await music.getSongs(for: album.id)
-                if downloads.isAlbumFullyDownloaded(songIds: songs.map(\.id)) {
-                    downloaded.insert(album.id)
+        let newDownloadedIds = await Task.detached(priority: .userInitiated) { [music, storage, currentScopeAlbums] in
+            var ids = Set<String>()
+            
+            await withTaskGroup(of: (String, Bool).self) { group in
+                for album in currentScopeAlbums {
+                    group.addTask {
+                        guard let songs = try? await music.getSongs(for: album.id) else { return (album.id, false) }
+                        let isDown = storage.isAlbumFullyDownloaded(songIds: songs.map(\.id))
+                        return (album.id, isDown)
+                    }
                 }
-            } catch {
-                continue
+                
+                for await (id, isDown) in group {
+                    if isDown { ids.insert(id) }
+                }
             }
-        }
+            return ids
+        }.value
         
-        downloadedAlbumIds = downloaded
+        self.downloadedAlbumIds = newDownloadedIds
     }
     
     private func isAlbumDownloaded(_ album: AlbumDTO) -> Bool {
@@ -103,17 +113,18 @@ final class LibraryViewModel {
         recentAlbums.contains { $0.genre == genre && downloadedAlbumIds.contains($0.id) }
     }
     
-    func refresh() async {
-        statusMessage = "Syncing library and covers..."
+    func refresh(force: Bool = false) async {
+        statusMessage = "Syncing..."
         do {
-            try await music.performSync()
+            try await music.performSync(force: force)
+            
+            // 3. Reload data after sync
             resetPagination()
-            await loadCurrentScope()
+            await loadCurrentScope() // This will now work because isLoading is managed correctly
             await updateDownloadedAlbums()
             
-            statusMessage = "✅ Offline library ready"
-            
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            statusMessage = "✅ Ready"
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
             statusMessage = nil
             
         } catch {
@@ -123,7 +134,6 @@ final class LibraryViewModel {
     
     func loadMore() async {
         guard canLoadMore && !isLoading else { return }
-        
         currentOffset += pageSize
         await loadCurrentScope(append: true)
     }
@@ -135,17 +145,15 @@ final class LibraryViewModel {
         do {
             switch scope {
             case .recent:
+                // Direct DB read (Fast)
                 let newAlbums = try await music.getAlbums(offset: currentOffset, limit: pageSize)
-                // ✅ FIXED: Sort alphabetically by title
-                let sortedAlbums = newAlbums.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
                 
                 if append {
-                    recentAlbums.append(contentsOf: sortedAlbums)
+                    recentAlbums.append(contentsOf: newAlbums)
                 } else {
-                    recentAlbums = sortedAlbums
+                    recentAlbums = newAlbums
                 }
                 canLoadMore = newAlbums.count == pageSize
-                print("📚 Loaded \(newAlbums.count) albums, total: \(recentAlbums.count)")
                 
             case .artists:
                 let newArtists = try await music.getArtists(offset: currentOffset, limit: pageSize)
@@ -155,12 +163,10 @@ final class LibraryViewModel {
                     artists = newArtists
                 }
                 canLoadMore = newArtists.count == pageSize
-                print("🎤 Loaded \(newArtists.count) artists, total: \(artists.count)")
                 
             case .genres:
                 if !append {
                     genres = try await music.getGenres()
-                    print("🎵 Loaded \(genres.count) genres")
                 }
                 canLoadMore = false
             }

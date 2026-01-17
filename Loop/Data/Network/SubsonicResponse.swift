@@ -2,7 +2,7 @@
 //  SubsonicResponse.swift
 //  Loop
 //
-//  Pure Sendable data types - Swift 6 warnings are false positives
+//  Fixed: Restored SubsonicPingResponse and all other response wrappers.
 //
 
 import Foundation
@@ -20,13 +20,20 @@ struct SubsonicResponse: Decodable, Sendable {
 struct SubsonicWrapper: Decodable, Sendable {
     let status: String
     let version: String
+    let type: String?
+    let serverVersion: String?
+    let error: RemoteError?
+    
+    // Lists
     let albumList2: RemoteAlbumList?
+    let searchResult3: RemoteSearchResult?
+    let indexes: RemoteIndexList? // Used for Smart Sync
+    
+    // Details
     let album: RemoteAlbumDetail?
     let artist: RemoteArtist?
     let genres: RemoteGenres?
     let song: RemoteSong?
-    let searchResult3: RemoteSearchResult?
-    let error: RemoteError?
 }
 
 struct RemoteError: Decodable, Sendable {
@@ -35,6 +42,8 @@ struct RemoteError: Decodable, Sendable {
 }
 
 // MARK: - Specific Response Types
+// These are required because the top-level key is always "subsonic-response",
+// but we define them separately to clarify intent at the call site.
 
 struct SubsonicPingResponse: Decodable, Sendable {
     let subsonicResponse: SubsonicWrapper
@@ -66,7 +75,19 @@ struct SubsonicSearchResponse: Decodable, Sendable {
     enum CodingKeys: String, CodingKey { case subsonicResponse = "subsonic-response" }
 }
 
-// MARK: - Data Entities
+// MARK: - Data Entities for 'getIndexes' (Smart Sync)
+
+struct RemoteIndexList: Decodable, Sendable {
+    let lastModified: Int64?
+    let index: [RemoteIndex]?
+}
+
+struct RemoteIndex: Decodable, Sendable {
+    let name: String
+    let artist: [RemoteArtist]?
+}
+
+// MARK: - Other Data Entities
 
 struct RemoteAlbumList: Decodable, Sendable {
     let album: [RemoteAlbum]?

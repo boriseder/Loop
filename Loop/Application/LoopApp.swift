@@ -2,7 +2,7 @@
 //  LoopApp.swift
 //  Loop
 //
-//  FIXED: Removed TabView, single NavigationStack with proper destinations
+//  FIXED: Splash Screen, Single NavigationStack, Global Progress
 //
 
 import SwiftUI
@@ -11,14 +11,21 @@ import SwiftUI
 struct LoopApp: App {
     @State private var container = AppContainer()
     @State private var isPlayerPresented = false
+    @State private var isReady = false // Gatekeeper for initialization
     
     var body: some Scene {
         WindowGroup {
-            Group {
-                if container.auth.isAuthenticated {
-                    AuthenticatedRoot()
+            ZStack {
+                if isReady {
+                    if container.auth.isAuthenticated {
+                        AuthenticatedRoot()
+                            .transition(.opacity)
+                    } else {
+                        LoginView()
+                            .transition(.opacity)
+                    }
                 } else {
-                    LoginView()
+                    SplashScreen()
                 }
             }
             .environment(container.auth)
@@ -40,6 +47,12 @@ struct LoopApp: App {
                 }
             }
             .animation(.easeInOut, value: container.music.isSyncing)
+            .task {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                withAnimation {
+                    isReady = true
+                }
+            }
         }
     }
     
@@ -47,7 +60,6 @@ struct LoopApp: App {
     private func AuthenticatedRoot() -> some View {
         @Bindable var router = container.router
         
-        // ✅ FIXED: Single NavigationStack without TabView
         NavigationStack(path: $router.path) {
             LibraryView()
                 .navigationDestination(for: Router.Destination.self) { destination in
@@ -55,7 +67,6 @@ struct LoopApp: App {
                 }
         }
         .overlay(alignment: .bottom) {
-            // ✅ FIXED: Only show if actually playing
             if container.playback.currentSongId != nil && container.playback.currentTitle != "Not Playing" {
                 MiniPlayerView()
                     .padding(.bottom, 8)
@@ -79,6 +90,23 @@ struct LoopApp: App {
             ArtistDetailView(artistId: id)
         case .genreDetail(let name):
             GenreDetailView(genreName: name)
+        }
+    }
+}
+
+struct SplashScreen: View {
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image(systemName: "infinity.circle.fill")
+                    .font(.system(size: 80))
+                    .foregroundStyle(Color.accentColor)
+                    .symbolEffect(.bounce, value: true)
+                Text("Loop")
+                    .font(.largeTitle.weight(.black))
+                    .foregroundStyle(.white)
+            }
         }
     }
 }
