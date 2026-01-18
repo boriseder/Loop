@@ -117,42 +117,48 @@ actor SyncManager {
         syncTask = nil
     }
     
-    private nonisolated func syncAlbumPage(type: String, offset: Int, size: Int) async throws -> Int {
-        let params = ["type": type, "offset": String(offset), "size": String(size)]
-        
-        let albums = try await Task {
-            let response: SubsonicResponse = try await client.fetch("getAlbumList2", params: params)
-            return response.subsonicResponse.albumList2?.album
-        }.value
-        
-        guard let albums else { return 0 }
-        try await repo.saveAlbums(albums)
-        return albums.count
-    }
-    
-    private nonisolated func syncGenres() async throws {
-        let genres = try await Task {
-            let response: SubsonicGenresResponse = try await client.fetch("getGenres")
-            return response.subsonicResponse.genres?.genre
-        }.value
-        
-        guard let genres else { return }
-        try await repo.saveGenres(genres)
-    }
-    
-    nonisolated func syncAlbumDetails(albumId: String) async throws {
-        let (details, remoteSongs) = try await Task {
-            let response: SubsonicGetAlbumResponse = try await client.fetch("getAlbum", params: ["id": albumId])
-            return (response.subsonicResponse.album, response.subsonicResponse.album?.song)
-        }.value
-        
-        guard let details, let remoteSongs else { throw SyncError.invalidResponse }
-        try await repo.saveAlbumDetails(album: details, songs: remoteSongs)
-        
-        if let coverId = details.coverArt {
-            Task { await cache.downloadCover(id: coverId) }
+    // ✅ FIX: Changed from 'private nonisolated' to '@MainActor private'
+        @MainActor
+        private func syncAlbumPage(type: String, offset: Int, size: Int) async throws -> Int {
+            let params = ["type": type, "offset": String(offset), "size": String(size)]
+            
+            let albums = try await Task {
+                let response: SubsonicResponse = try await client.fetch("getAlbumList2", params: params)
+                return response.subsonicResponse.albumList2?.album
+            }.value
+            
+            guard let albums else { return 0 }
+            try await repo.saveAlbums(albums)
+            return albums.count
         }
-    }
+        
+        // ✅ FIX: Changed from 'private nonisolated' to '@MainActor private'
+        @MainActor
+        private func syncGenres() async throws {
+            let genres = try await Task {
+                let response: SubsonicGenresResponse = try await client.fetch("getGenres")
+                return response.subsonicResponse.genres?.genre
+            }.value
+            
+            guard let genres else { return }
+            try await repo.saveGenres(genres)
+        }
+        
+        // ✅ FIX: Changed from 'nonisolated' to '@MainActor'
+        @MainActor
+        func syncAlbumDetails(albumId: String) async throws {
+            let (details, remoteSongs) = try await Task {
+                let response: SubsonicGetAlbumResponse = try await client.fetch("getAlbum", params: ["id": albumId])
+                return (response.subsonicResponse.album, response.subsonicResponse.album?.song)
+            }.value
+            
+            guard let details, let remoteSongs else { throw SyncError.invalidResponse }
+            try await repo.saveAlbumDetails(album: details, songs: remoteSongs)
+            
+            if let coverId = details.coverArt {
+                Task { await cache.downloadCover(id: coverId) }
+            }
+        }
     
     private func downloadAllCovers(totalAlbums: Int) async {
         do {

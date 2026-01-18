@@ -11,34 +11,44 @@ import OSLog
 import Network
 
 // MARK: - Storage Strategy (Thread Safe)
+// MARK: - Storage Strategy (Thread Safe)
 // This struct handles all File I/O paths and checks. It is Sendable and Non-Isolated.
 struct DownloadStorage: Sendable {
-    private let fileManager = FileManager.default
+    // ❌ REMOVED: private let fileManager = FileManager.default (caused isolation issues)
     
-    var musicDirectory: URL {
+    // ✅ FIX: Explicit nonisolated init
+    nonisolated init() {}
+    
+    // ✅ FIX: Explicit nonisolated computed property
+    nonisolated var musicDirectory: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Music")
     }
     
-    func createDirectories() {
-        try? fileManager.createDirectory(at: musicDirectory, withIntermediateDirectories: true)
+    // ✅ FIX: Explicit nonisolated method using FileManager.default directly
+    nonisolated func createDirectories() {
+        try? FileManager.default.createDirectory(at: musicDirectory, withIntermediateDirectories: true)
     }
     
-    func localFileURL(for songId: String) -> URL {
+    // ✅ FIX: Explicit nonisolated method
+    nonisolated func localFileURL(for songId: String) -> URL {
         musicDirectory.appendingPathComponent("\(songId).mp3")
     }
     
-    func isSongDownloaded(id: String) -> Bool {
-        fileManager.fileExists(atPath: localFileURL(for: id).path)
+    // ✅ FIX: Explicit nonisolated method using FileManager.default directly
+    nonisolated func isSongDownloaded(id: String) -> Bool {
+        FileManager.default.fileExists(atPath: localFileURL(for: id).path)
     }
     
-    func isAlbumFullyDownloaded(songIds: [String]) -> Bool {
+    // ✅ FIX: Explicit nonisolated method
+    nonisolated func isAlbumFullyDownloaded(songIds: [String]) -> Bool {
         guard !songIds.isEmpty else { return false }
         return songIds.allSatisfy { isSongDownloaded(id: $0) }
     }
     
-    func getTotalDownloadSize() -> Int64 {
-        guard let files = try? fileManager.contentsOfDirectory(
+    // ✅ FIX: Explicit nonisolated method using FileManager.default directly
+    nonisolated func getTotalDownloadSize() -> Int64 {
+        guard let files = try? FileManager.default.contentsOfDirectory(
             at: musicDirectory,
             includingPropertiesForKeys: [.fileSizeKey]
         ) else { return 0 }

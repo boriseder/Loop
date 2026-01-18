@@ -92,4 +92,11 @@ struct SearchResults: Sendable {
     var songs: [SongDTO] = []
     var albums: [AlbumDTO] = []
     var artists: [ArtistDTO] = []
+    
+    // ✅ FIX: Explicit nonisolated init to allow creation in background threads
+    nonisolated init(songs: [SongDTO] = [], albums: [AlbumDTO] = [], artists: [ArtistDTO] = []) {
+        self.songs = songs
+        self.albums = albums
+        self.artists = artists
+    }
 }
