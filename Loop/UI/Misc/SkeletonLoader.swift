@@ -2,7 +2,7 @@
 //  SkeletonLoader.swift
 //  Loop
 //
-//  FIXED: Added AlbumDetailSkeleton
+//  FIXED: Added explicit sizing for LazyVGrid
 //
 
 import SwiftUI
@@ -19,19 +19,18 @@ struct AlbumGridSkeleton: View {
                 VStack(alignment: .leading, spacing: 8) {
                     // Cover Placeholder
                     RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.secondary.opacity(0.1))
-                        .frame(height: 160)
-                        .frame(maxWidth: .infinity)
+                        .fill(Color.secondary.opacity(0.3))
+                        .frame(width: 160, height: 160) // ✅ FIXED: Explicit size
                     
                     // Title Line
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.secondary.opacity(0.1))
+                        .fill(Color.secondary.opacity(0.3))
                         .frame(height: 16)
                         .frame(width: 120)
                     
                     // Artist Line
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(Color.secondary.opacity(0.1))
+                        .fill(Color.secondary.opacity(0.3))
                         .frame(height: 12)
                         .frame(width: 80)
                 }

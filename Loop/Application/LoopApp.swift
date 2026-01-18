@@ -2,7 +2,7 @@
 //  LoopApp.swift
 //  Loop
 //
-//  FIXED: Replaced Splash Screen with Library Skeleton for seamless launch
+//  FIXED: Integrated skeleton into LibraryView for seamless transitions
 //
 
 import SwiftUI
@@ -11,23 +11,18 @@ import SwiftUI
 struct LoopApp: App {
     @State private var container = AppContainer()
     @State private var isPlayerPresented = false
-    @State private var isReady = false // Gatekeeper for initialization
+    @State private var isAuthChecked = false // ✅ Track if auth check is complete
     
     var body: some Scene {
         WindowGroup {
-            ZStack {
-                if isReady {
-                    if container.auth.isAuthenticated {
-                        AuthenticatedRoot()
-                            .transition(.opacity)
-                    } else {
-                        LoginView()
-                            .transition(.opacity)
-                    }
+            Group {
+                if !isAuthChecked {
+                    // ✅ Show nothing while checking auth (very brief)
+                    Color.clear
+                } else if container.auth.isAuthenticated {
+                    AuthenticatedRoot()
                 } else {
-                    // ✅ NEW: Show Skeleton instead of Splash
-                    LaunchSkeletonView()
-                        .transition(.opacity)
+                    LoginView()
                 }
             }
             .environment(container.auth)
@@ -50,15 +45,10 @@ struct LoopApp: App {
             }
             .animation(.easeInOut, value: container.music.isSyncing)
             .task {
-                // Wait for Keychain read to complete
-                // We keep a small delay to prevent a harsh "flash" if auth is instant
-                async let check: Void = container.auth.restoreSession()
-                async let minimumDelay: Void = Task.sleep(nanoseconds: 500_000_000) // 0.5s skeleton
-                
-                _ = try? await (check, minimumDelay)
-                
-                withAnimation {
-                    isReady = true
+                await container.auth.restoreSession()
+                // Mark auth check as complete
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isAuthChecked = true
                 }
             }
         }
@@ -101,53 +91,5 @@ struct LoopApp: App {
         case .downloads:
             DownloadsView()
         }
-    }
-}
-
-// MARK: - Launch Skeleton
-// Replicates the LibraryView structure for a seamless transition
-
-struct LaunchSkeletonView: View {
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                // Fake Filter Bar (Matches LibraryView)
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        fakeFilterChip("Albums", isSelected: true)
-                        fakeFilterChip("Artists", isSelected: false)
-                        fakeFilterChip("Genres", isSelected: false)
-                    }
-                    .padding()
-                }
-                .background(Material.regular)
-                
-                // Skeleton Grid
-                AlbumGridSkeleton()
-            }
-            .navigationTitle("Library")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                // Fake Toolbar Items to match layout
-                ToolbarItem(placement: .topBarLeading) {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                        .foregroundStyle(.secondary)
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Image(systemName: "arrow.down.circle")
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-    
-    private func fakeFilterChip(_ title: String, isSelected: Bool) -> some View {
-        Text(title)
-            .font(.subheadline.bold())
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.1))
-            .foregroundStyle(isSelected ? .white : .primary)
-            .clipShape(Capsule())
     }
 }

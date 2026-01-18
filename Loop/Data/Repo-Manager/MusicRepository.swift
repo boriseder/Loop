@@ -18,7 +18,7 @@ final class MusicRepository: Sendable {
     init(db: MusicDatabase) {
         self.modelContainer = db.container
     }
-    
+
     // MARK: - Direct DB Reads
     
     nonisolated func getAlbums(offset: Int = 0, limit: Int = 100) async throws -> [AlbumDTO] {
@@ -147,6 +147,7 @@ final class MusicRepository: Sendable {
         guard !cleanQuery.isEmpty else { return SearchResults() }
         
         return try await withCancellationCheck {
+            
             let context = ModelContext(modelContainer)
             
             // ✅ FIX: Removed SortDescriptors from all FetchDescriptors

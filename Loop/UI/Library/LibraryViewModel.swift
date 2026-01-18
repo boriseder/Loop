@@ -39,6 +39,8 @@ final class LibraryViewModel {
         showDownloadedOnly ? artists.filter { music.downloadedArtistIds.contains($0.id) } : artists
     }
     
+    var isInitialLoad = true
+
     var filteredGenres: [GenreDTO] {
         showDownloadedOnly ? genres.filter { music.downloadedGenres.contains($0.name) } : genres
     }
@@ -60,7 +62,6 @@ final class LibraryViewModel {
     }
     
     func loadInitialData() async {
-        // ✅ FIX: Reset pagination when view reappears so we don't load "Page 10" as the only content
         resetPagination()
         
         await loadCurrentScope()
@@ -72,8 +73,11 @@ final class LibraryViewModel {
         } else {
             print("✅ Loaded \(albums.count) albums from local DB")
         }
+        
+        // Mark initial load as complete
+        isInitialLoad = false
     }
-    
+
     func updateFilter(downloadedOnly: Bool) async {
         showDownloadedOnly = downloadedOnly
         if downloadedOnly {

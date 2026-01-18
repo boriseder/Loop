@@ -2,7 +2,7 @@
 //  LibraryView.swift
 //  Loop
 //
-//  FIXED: Proper loading state logic to ensure Skeleton is visible
+//  FIXED: Integrated skeleton for seamless loading
 //
 
 import SwiftUI
@@ -16,83 +16,42 @@ struct LibraryView: View {
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var showDownloadedOnly = false
+    @State private var isInitialLoad = true // ✅ NEW: Track initial load
     
     private let columns = [
         GridItem(.adaptive(minimum: 160, maximum: 180), spacing: 16)
     ]
     
     var body: some View {
-        Group {
-            if let vm = viewModel {
-                mainContent(vm)
-            } else {
-                // Initial creation skeleton
-                loadingView
-            }
-        }
-        .onAppear {
-            if viewModel == nil {
-                viewModel = LibraryViewModel(music: music, downloads: downloads)
-            }
-        }
-        .task {
-            if let vm = viewModel {
-                await vm.loadInitialData()
-            }
-        }
-        .sheet(isPresented: $showSearch) { SearchView() }
-        .sheet(isPresented: $showSettings) { SettingsView() }
-    }
-    
-    private var loadingView: some View {
-        ScrollView {
-            VStack {
-                AlbumGridSkeleton()
-            }
-            .padding()
-        }
-    }
-    
-    @ViewBuilder
-    private func mainContent(_ vm: LibraryViewModel) -> some View {
         VStack(spacing: 0) {
-            // Filter Bar
+            // Filter Bar (Always visible)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
-                    filterChip("Albums", scope: .recent, vm: vm)
-                    filterChip("Artists", scope: .artists, vm: vm)
-                    filterChip("Genres", scope: .genres, vm: vm)
+                    if let vm = viewModel {
+                        filterChip("Albums", scope: .recent, vm: vm)
+                        filterChip("Artists", scope: .artists, vm: vm)
+                        filterChip("Genres", scope: .genres, vm: vm)
+                    } else {
+                        // Skeleton chips
+                        fakeFilterChip("Albums", isSelected: true)
+                        fakeFilterChip("Artists", isSelected: false)
+                        fakeFilterChip("Genres", isSelected: false)
+                    }
                 }
                 .padding()
             }
             .background(Material.regular)
             
-            // Main Content
-            // ✅ FIX: Strict state checking order
-            if vm.isLoading && vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty {
-                // 1. Loading State (and empty data)
-                loadingView
-            } else if vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty && vm.filteredGenres.isEmpty {
-                // 2. Empty State (Only if NOT loading)
-                ContentUnavailableView(
-                    "No Music",
-                    systemImage: "music.note",
-                    description: Text("Library is empty. Try syncing or downloading music.")
-                )
-                .padding(.top, 50)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                // 3. Content State
-                ScrollView {
-                    contentGrid(vm)
-                        .padding()
-                    
-                    if vm.isLoading && !vm.filteredAlbums.isEmpty {
-                        ProgressView()
-                            .padding()
-                    }
+            // Main Content Area
+            Group {
+                if isInitialLoad {
+                    // ✅ Show skeleton during initial load
+                    skeletonContent
+                } else if let vm = viewModel {
+                    mainContent(vm)
+                } else {
+                    skeletonContent
                 }
-                .refreshable { await vm.refresh(force: true) }
             }
         }
         .navigationTitle("Library")
@@ -122,11 +81,28 @@ struct LibraryView: View {
                 }
             }
         }
+        .onAppear {
+            if viewModel == nil {
+                viewModel = LibraryViewModel(music: music, downloads: downloads)
+            }
+        }
+        .task {
+            if let vm = viewModel {
+                await vm.loadInitialData()
+                // Small delay to show skeleton
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isInitialLoad = false
+                }
+            }
+        }
+        .sheet(isPresented: $showSearch) { SearchView() }
+        .sheet(isPresented: $showSettings) { SettingsView() }
         .onChange(of: showDownloadedOnly) { _, newValue in
             Task { await viewModel?.updateFilter(downloadedOnly: newValue) }
         }
         .overlay(alignment: .bottom) {
-            if let msg = vm.statusMessage {
+            if let vm = viewModel, let msg = vm.statusMessage {
                 Text(msg)
                     .font(.caption)
                     .padding(8)
@@ -137,7 +113,49 @@ struct LibraryView: View {
         }
     }
     
-    // ... (Keep existing filterChip, contentGrid, and AlbumCell code identical)
+    // ✅ NEW: Skeleton Content
+    private var skeletonContent: some View {
+        ScrollView {
+            VStack {
+                AlbumGridSkeleton()
+                    .padding()
+                
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Loading library...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 20)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func mainContent(_ vm: LibraryViewModel) -> some View {
+        if vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty && vm.filteredGenres.isEmpty && !vm.isLoading {
+            ContentUnavailableView(
+                "No Music",
+                systemImage: "music.note",
+                description: Text("Library is empty. Try syncing or downloading music.")
+            )
+            .padding(.top, 50)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                contentGrid(vm)
+                    .padding()
+                
+                if vm.isLoading && !vm.filteredAlbums.isEmpty {
+                    ProgressView()
+                        .padding()
+                }
+            }
+            .refreshable { await vm.refresh(force: true) }
+        }
+    }
+    
     @ViewBuilder
     private func filterChip(_ title: String, scope: LibraryViewModel.LibraryScope, vm: LibraryViewModel) -> some View {
         Button {
@@ -151,6 +169,16 @@ struct LibraryView: View {
                 .foregroundStyle(vm.scope == scope ? .white : .primary)
                 .clipShape(Capsule())
         }
+    }
+    
+    private func fakeFilterChip(_ title: String, isSelected: Bool) -> some View {
+        Text(title)
+            .font(.subheadline.bold())
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.1))
+            .foregroundStyle(isSelected ? .white : .primary)
+            .clipShape(Capsule())
     }
     
     @ViewBuilder
