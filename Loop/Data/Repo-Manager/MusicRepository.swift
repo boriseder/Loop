@@ -2,7 +2,8 @@
 //  MusicRepository.swift
 //  Loop
 //
-//  FIXED: In-Memory Sorting (No Fetch Crashes) + Transaction Cache (No Missing Artists)
+//  FIXED: Removed SortDescriptors from Search to prevent crashes.
+//  Sorting is now done in-memory.
 //
 
 import Foundation
@@ -18,13 +19,12 @@ final class MusicRepository: Sendable {
         self.modelContainer = db.container
     }
     
-    // MARK: - Direct DB Reads (Offline-First)
+    // MARK: - Direct DB Reads
     
     nonisolated func getAlbums(offset: Int = 0, limit: Int = 100) async throws -> [AlbumDTO] {
         try await withCancellationCheck {
             let context = ModelContext(modelContainer)
-            
-            // ❌ NO SortDescriptor in Fetch (Prevents Crashes)
+            // ❌ NO SortDescriptor in Fetch
             var descriptor = FetchDescriptor<Loop.Album>()
             descriptor.fetchOffset = offset
             descriptor.fetchLimit = limit
@@ -42,7 +42,7 @@ final class MusicRepository: Sendable {
         try await withCancellationCheck {
             let context = ModelContext(modelContainer)
             
-            // ❌ NO SortDescriptor in Fetch (Prevents Crashes)
+            // ❌ NO SortDescriptor in Fetch
             var descriptor = FetchDescriptor<Loop.Artist>()
             descriptor.fetchOffset = offset
             descriptor.fetchLimit = limit
@@ -99,7 +99,6 @@ final class MusicRepository: Sendable {
             let descriptor = FetchDescriptor<Loop.Album>(predicate: predicate)
             let albums = try context.fetch(descriptor)
             
-            // Sort by Year (Descending)
             return albums
                 .map { AlbumDTO(from: $0) }
                 .sorted { ($0.year ?? 0) > ($1.year ?? 0) }
@@ -150,23 +149,31 @@ final class MusicRepository: Sendable {
         return try await withCancellationCheck {
             let context = ModelContext(modelContainer)
             
+            // ✅ FIX: Removed SortDescriptors from all FetchDescriptors
+            
             // Albums
             let albumPred = #Predicate<Loop.Album> { $0.title.localizedStandardContains(cleanQuery) }
             var albumDesc = FetchDescriptor<Loop.Album>(predicate: albumPred)
             albumDesc.fetchLimit = 10
-            let albums = try context.fetch(albumDesc).map { AlbumDTO(from: $0) }
+            let albums = try context.fetch(albumDesc)
+                .map { AlbumDTO(from: $0) }
+                .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
             
             // Artists
             let artistPred = #Predicate<Loop.Artist> { $0.name.localizedStandardContains(cleanQuery) }
             var artistDesc = FetchDescriptor<Loop.Artist>(predicate: artistPred)
             artistDesc.fetchLimit = 5
-            let artists = try context.fetch(artistDesc).map { ArtistDTO(from: $0) }
+            let artists = try context.fetch(artistDesc)
+                .map { ArtistDTO(from: $0) }
+                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             
             // Songs
             let songPred = #Predicate<Loop.Song> { $0.title.localizedStandardContains(cleanQuery) }
             var songDesc = FetchDescriptor<Loop.Song>(predicate: songPred)
             songDesc.fetchLimit = 20
-            let songs = try context.fetch(songDesc).map { SongDTO(from: $0) }
+            let songs = try context.fetch(songDesc)
+                .map { SongDTO(from: $0) }
+                .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
             
             return SearchResults(songs: songs, albums: albums, artists: artists)
         }
@@ -319,7 +326,7 @@ final class MusicRepository: Sendable {
         return artist
     }
     
-    // Wrapper for cases where cache isn't available
+    // Wrapper for cases where cache isn't available (Single updates)
     private func getOrCreateArtist(id: String, name: String, in context: ModelContext) throws -> Loop.Artist {
         var dummyCache: [String: Loop.Artist] = [:]
         return try getOrCreateArtist(id: id, name: name, in: context, cache: &dummyCache)

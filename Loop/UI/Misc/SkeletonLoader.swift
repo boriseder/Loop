@@ -1,226 +1,146 @@
 //
-//  ShimmerEffect.swift
-//  Loop
-//
-//  Created by Boris Eder on 16.01.26.
-//
-
-
-//
 //  SkeletonLoader.swift
 //  Loop
 //
-//  Reusable skeleton loading views
+//  FIXED: Added AlbumDetailSkeleton
 //
 
 import SwiftUI
 
+// MARK: - Grid Skeleton (Library)
+struct AlbumGridSkeleton: View {
+    private let columns = [
+        GridItem(.adaptive(minimum: 160, maximum: 180), spacing: 16)
+    ]
+    
+    var body: some View {
+        LazyVGrid(columns: columns, spacing: 20) {
+            ForEach(0..<12, id: \.self) { _ in
+                VStack(alignment: .leading, spacing: 8) {
+                    // Cover Placeholder
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.secondary.opacity(0.1))
+                        .frame(height: 160)
+                        .frame(maxWidth: .infinity)
+                    
+                    // Title Line
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.secondary.opacity(0.1))
+                        .frame(height: 16)
+                        .frame(width: 120)
+                    
+                    // Artist Line
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.secondary.opacity(0.1))
+                        .frame(height: 12)
+                        .frame(width: 80)
+                }
+                .shimmering()
+            }
+        }
+    }
+}
+
+// MARK: - Detail Skeleton (Album/Artist)
+struct AlbumDetailSkeleton: View {
+    var body: some View {
+        VStack(spacing: 24) {
+            // Header Section
+            HStack(alignment: .bottom, spacing: 20) {
+                // Cover
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.secondary.opacity(0.1))
+                    .frame(width: 140, height: 140)
+                
+                // Info
+                VStack(alignment: .leading, spacing: 12) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.secondary.opacity(0.1))
+                        .frame(height: 24)
+                        .frame(maxWidth: 200)
+                    
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.secondary.opacity(0.1))
+                        .frame(height: 16)
+                        .frame(width: 120)
+                    
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.secondary.opacity(0.1))
+                        .frame(height: 12)
+                        .frame(width: 80)
+                }
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.top)
+            
+            Divider().padding(.horizontal)
+            
+            // Songs List
+            VStack(spacing: 0) {
+                ForEach(0..<8, id: \.self) { _ in
+                    HStack(spacing: 16) {
+                        // Track Num
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.secondary.opacity(0.1))
+                            .frame(width: 20, height: 16)
+                        
+                        // Title
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.secondary.opacity(0.1))
+                            .frame(height: 16)
+                            .frame(maxWidth: .infinity)
+                        
+                        // Duration
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.secondary.opacity(0.1))
+                            .frame(width: 40, height: 16)
+                    }
+                    .padding()
+                    
+                    Divider().padding(.leading, 16)
+                }
+            }
+        }
+        .shimmering()
+    }
+}
+
 // MARK: - Shimmer Effect
+extension View {
+    func shimmering() -> some View {
+        modifier(ShimmerEffect())
+    }
+}
 
 struct ShimmerEffect: ViewModifier {
     @State private var phase: CGFloat = 0
     
     func body(content: Content) -> some View {
         content
-            .overlay {
-                GeometryReader { geometry in
-                    LinearGradient(
-                        colors: [
-                            .clear,
-                            .white.opacity(0.3),
-                            .clear
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    .frame(width: geometry.size.width * 2)
-                    .offset(x: phase * geometry.size.width * 2 - geometry.size.width)
-                    .onAppear {
-                        withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) {
-                            phase = 1
-                        }
-                    }
+            .overlay(
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                gradient: Gradient(colors: [
+                                    .clear,
+                                    .white.opacity(0.2),
+                                    .clear
+                                ]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .rotationEffect(.degrees(30))
+                        .offset(x: -geo.size.width + (phase * (geo.size.width * 3)))
                 }
-            }
+            )
             .mask(content)
-    }
-}
-
-extension View {
-    func shimmer() -> some View {
-        modifier(ShimmerEffect())
-    }
-}
-
-// MARK: - Album Grid Skeleton
-
-struct AlbumGridSkeleton: View {
-    let count: Int = 6
-    
-    private let columns = [
-        GridItem(.adaptive(minimum: 150, maximum: 180), spacing: 16)
-    ]
-    
-    var body: some View {
-        LazyVGrid(columns: columns, spacing: 20) {
-            ForEach(0..<count, id: \.self) { _ in
-                AlbumCellSkeleton()
-            }
-        }
-        .padding()
-    }
-}
-
-struct AlbumCellSkeleton: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.secondary.opacity(0.2))
-                .frame(width: 180, height: 180)
-                .shimmer()
-            
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color.secondary.opacity(0.2))
-                .frame(height: 16)
-                .shimmer()
-            
-            RoundedRectangle(cornerRadius: 4)
-                .fill(Color.secondary.opacity(0.2))
-                .frame(width: 100, height: 12)
-                .shimmer()
-        }
-    }
-}
-
-// MARK: - List Row Skeleton
-
-struct ListRowSkeleton: View {
-    var body: some View {
-        HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.secondary.opacity(0.2))
-                .frame(width: 60, height: 60)
-                .shimmer()
-            
-            VStack(alignment: .leading, spacing: 6) {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.secondary.opacity(0.2))
-                    .frame(height: 16)
-                    .shimmer()
-                
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.secondary.opacity(0.2))
-                    .frame(width: 120, height: 12)
-                    .shimmer()
-            }
-            
-            Spacer()
-        }
-        .padding()
-    }
-}
-
-struct ListSkeletonView: View {
-    let count: Int = 8
-    
-    var body: some View {
-        LazyVStack(spacing: 0) {
-            ForEach(0..<count, id: \.self) { _ in
-                ListRowSkeleton()
-                Divider()
-            }
-        }
-    }
-}
-
-// MARK: - Album Detail Skeleton
-
-struct AlbumDetailSkeleton: View {
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                // Header
-                VStack(spacing: 12) {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.secondary.opacity(0.2))
-                        .frame(width: 200, height: 200)
-                        .shimmer()
-                    
-                    VStack(spacing: 4) {
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.secondary.opacity(0.2))
-                            .frame(width: 180, height: 20)
-                            .shimmer()
-                        
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.secondary.opacity(0.2))
-                            .frame(width: 120, height: 16)
-                            .shimmer()
-                    }
-                    
-                    HStack(spacing: 20) {
-                        Capsule()
-                            .fill(Color.secondary.opacity(0.2))
-                            .frame(width: 120, height: 44)
-                            .shimmer()
-                        
-                        Circle()
-                            .fill(Color.secondary.opacity(0.2))
-                            .frame(width: 50, height: 50)
-                            .shimmer()
-                    }
-                }
-                .padding(.top, 20)
-                
-                Divider().padding(.horizontal)
-                
-                // Track list
-                LazyVStack(spacing: 0) {
-                    ForEach(0..<10, id: \.self) { _ in
-                        HStack(spacing: 16) {
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.secondary.opacity(0.2))
-                                .frame(width: 25, height: 16)
-                                .shimmer()
-                            
-                            VStack(alignment: .leading, spacing: 4) {
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(Color.secondary.opacity(0.2))
-                                    .frame(height: 16)
-                                    .shimmer()
-                                
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(Color.secondary.opacity(0.2))
-                                    .frame(width: 100, height: 12)
-                                    .shimmer()
-                            }
-                            
-                            Spacer()
-                            
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.secondary.opacity(0.2))
-                                .frame(width: 40, height: 12)
-                                .shimmer()
-                        }
-                        .padding(.horizontal)
-                        .padding(.vertical, 12)
-                        
-                        Divider().padding(.leading, 50)
-                    }
+            .onAppear {
+                withAnimation(Animation.linear(duration: 1.5).repeatForever(autoreverses: false)) {
+                    phase = 1
                 }
             }
-        }
     }
-}
-
-#Preview("Album Grid") {
-    AlbumGridSkeleton()
-}
-
-#Preview("List") {
-    ListSkeletonView()
-}
-
-#Preview("Album Detail") {
-    AlbumDetailSkeleton()
 }

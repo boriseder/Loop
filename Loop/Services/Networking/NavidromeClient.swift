@@ -55,6 +55,9 @@ actor NavidromeClient {
         let maxRetries = 3
         
         do {
+            // Print the API request to console
+            print("🌍 [API] GET: \(url.absoluteString)")
+            
             var request = URLRequest(url: url)
             request.timeoutInterval = 30
             

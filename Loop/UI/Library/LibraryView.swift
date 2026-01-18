@@ -2,7 +2,7 @@
 //  LibraryView.swift
 //  Loop
 //
-//  FIXED: Pass filter state to Artist Detail
+//  FIXED: Proper loading state logic to ensure Skeleton is visible
 //
 
 import SwiftUI
@@ -26,6 +26,7 @@ struct LibraryView: View {
             if let vm = viewModel {
                 mainContent(vm)
             } else {
+                // Initial creation skeleton
                 loadingView
             }
         }
@@ -44,8 +45,11 @@ struct LibraryView: View {
     }
     
     private var loadingView: some View {
-        VStack {
-            AlbumGridSkeleton()
+        ScrollView {
+            VStack {
+                AlbumGridSkeleton()
+            }
+            .padding()
         }
     }
     
@@ -64,18 +68,32 @@ struct LibraryView: View {
             .background(Material.regular)
             
             // Main Content
-            ScrollView {
-                if vm.isLoading && vm.filteredAlbums.isEmpty {
-                    AlbumGridSkeleton()
-                } else if vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty && vm.filteredGenres.isEmpty {
-                    ContentUnavailableView("No Music", systemImage: "music.note", description: Text("Library is empty"))
-                        .padding(.top, 50)
-                } else {
+            // ✅ FIX: Strict state checking order
+            if vm.isLoading && vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty {
+                // 1. Loading State (and empty data)
+                loadingView
+            } else if vm.filteredAlbums.isEmpty && vm.filteredArtists.isEmpty && vm.filteredGenres.isEmpty {
+                // 2. Empty State (Only if NOT loading)
+                ContentUnavailableView(
+                    "No Music",
+                    systemImage: "music.note",
+                    description: Text("Library is empty. Try syncing or downloading music.")
+                )
+                .padding(.top, 50)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // 3. Content State
+                ScrollView {
                     contentGrid(vm)
                         .padding()
+                    
+                    if vm.isLoading && !vm.filteredAlbums.isEmpty {
+                        ProgressView()
+                            .padding()
+                    }
                 }
+                .refreshable { await vm.refresh(force: true) }
             }
-            .refreshable { await vm.refresh() }
         }
         .navigationTitle("Library")
         .navigationBarTitleDisplayMode(.inline)
@@ -83,17 +101,24 @@ struct LibraryView: View {
             ToolbarItem(placement: .topBarLeading) {
                 Menu {
                     Button { showSearch = true } label: { Label("Search", systemImage: "magnifyingglass") }
+                    Button {
+                        Task { await viewModel?.refresh(force: true) }
+                    } label: {
+                        Label("Force Sync", systemImage: "arrow.triangle.2.circlepath")
+                    }
                     Button { showSettings = true } label: { Label("Settings", systemImage: "gear") }
                     Divider()
                     Toggle(isOn: $showDownloadedOnly) { Label("Downloaded Only", systemImage: "arrow.down.circle") }
-                    Button {
-                        router.navigateToDownloads()
-                    } label: {
-                        Label("DownloadsView", systemImage: "arrow.down.circle")
-                    }
-
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
+                }
+            }
+            
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    router.navigateToDownloads()
+                } label: {
+                    Image(systemName: "arrow.down.circle")
                 }
             }
         }
@@ -112,6 +137,7 @@ struct LibraryView: View {
         }
     }
     
+    // ... (Keep existing filterChip, contentGrid, and AlbumCell code identical)
     @ViewBuilder
     private func filterChip(_ title: String, scope: LibraryViewModel.LibraryScope, vm: LibraryViewModel) -> some View {
         Button {
@@ -148,7 +174,6 @@ struct LibraryView: View {
         case .artists:
             LazyVStack(spacing: 0) {
                 ForEach(vm.filteredArtists) { artist in
-                    // ✅ UPDATE: Pass vm.showDownloadedOnly
                     NavigationLink(value: Router.Destination.artistDetail(artistId: artist.id, showDownloadedOnly: vm.showDownloadedOnly)) {
                         HStack {
                             Text(artist.name).font(.body)
@@ -195,7 +220,6 @@ struct LibraryView: View {
     }
 }
 
-// Ensure AlbumCell is available (retained from previous files)
 struct AlbumCell: View {
     let album: AlbumDTO
     @Environment(MusicEnvironment.self) private var music

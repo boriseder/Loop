@@ -2,7 +2,7 @@
 //  AppContainer.swift
 //  Loop
 //
-//  FIXED: Global Download State moved to MusicEnvironment
+//  FIXED: Exposed session restoration to AuthEnvironment
 //
 
 import Foundation
@@ -47,7 +47,6 @@ final class AppContainer {
         self.repo = repo
         
         self.auth = AuthEnvironment(service: authService)
-        // ✅ Inject DownloadManager into MusicEnvironment so it can scan files
         self.music = MusicEnvironment(repo: repo, sync: syncManager, coverCache: coverCache, downloads: downloadManager)
         self.playback = PlaybackEnvironment(engine: audioEngine)
         self.downloads = DownloadEnvironment(manager: downloadManager)
@@ -67,6 +66,11 @@ final class AuthEnvironment {
         self.service = service
     }
     
+    // ✅ NEW: Delegate call to service
+    func restoreSession() async {
+        await service.restoreSession()
+    }
+    
     func login(credentials: Credentials) async {
         await service.login(credentials: credentials)
     }
@@ -76,17 +80,17 @@ final class AuthEnvironment {
     }
 }
 
+// (MusicEnvironment, PlaybackEnvironment, DownloadEnvironment remain unchanged)
 @Observable @MainActor
 final class MusicEnvironment {
     private let repo: MusicRepository
     private let sync: SyncManager
     private let coverCache: CoverArtCache
-    private let downloadManager: DownloadManager // ✅ Internal reference for scanning
+    private let downloadManager: DownloadManager
     
     private(set) var syncProgress: SyncProgress = SyncProgress(phase: .idle)
     private(set) var isSyncing = false
     
-    // ✅ GLOBAL Download State (Observed by all ViewModels)
     var downloadedAlbumIds: Set<String> = []
     var downloadedArtistIds: Set<String> = []
     var downloadedGenres: Set<String> = []
@@ -105,26 +109,16 @@ final class MusicEnvironment {
         }
     }
     
-    // ✅ GLOBAL State Update Logic
-    // This runs a deep scan of the library to see what is fully downloaded.
     func updateDownloadedState() async {
         let storage = downloadManager.storage
         let repo = self.repo
-        
-        // Run deep scan in background thread to avoid freezing UI
         let state = await Task.detached(priority: .utility) {
             var dAlbums = Set<String>()
             var dArtists = Set<String>()
             var dGenres = Set<String>()
-            
             do {
-                // Fetch all albums to check their download status
-                // (In a massive library, you might optimize this to only check local file structure,
-                // but checking via DB ensures consistency with metadata)
                 let allAlbums = try await repo.getAlbums(offset: 0, limit: 10000)
-                
                 for album in allAlbums {
-                    // Check if all songs in this album are downloaded
                     if let songs = try? await repo.getSongs(for: album.id) {
                         let songIds = songs.map { $0.id }
                         if !songIds.isEmpty && storage.isAlbumFullyDownloaded(songIds: songIds) {
@@ -134,74 +128,30 @@ final class MusicEnvironment {
                         }
                     }
                 }
-            } catch {
-                print("Error calculating global download state: \(error)")
-            }
+            } catch { print("Error calculating global download state: \(error)") }
             return (dAlbums, dArtists, dGenres)
         }.value
-        
-        // Update MainActor state
         self.downloadedAlbumIds = state.0
         self.downloadedArtistIds = state.1
         self.downloadedGenres = state.2
     }
     
-    // MARK: - Read Operations
-    
-    func getAlbums(offset: Int = 0, limit: Int = 100) async throws -> [AlbumDTO] {
-        try await repo.getAlbums(offset: offset, limit: limit)
-    }
-    
-    func getArtists(offset: Int = 0, limit: Int = 100) async throws -> [ArtistDTO] {
-        try await repo.getArtists(offset: offset, limit: limit)
-    }
-    
-    func getGenres() async throws -> [GenreDTO] {
-        try await repo.getGenres()
-    }
-    
-    func getAlbum(id: String) async throws -> AlbumDTO? {
-        try await repo.getAlbum(id: id)
-    }
-    
-    func getSongs(for albumId: String) async throws -> [SongDTO] {
-        try await repo.getSongs(for: albumId)
-    }
-    
-    func getArtist(id: String) async throws -> ArtistDTO? {
-        try await repo.getArtist(id: id)
-    }
-    
-    func getAlbums(forArtist artistId: String) async throws -> [AlbumDTO] {
-        try await repo.getAlbums(forArtist: artistId)
-    }
-    
-    func getAlbums(forGenre genre: String) async throws -> [AlbumDTO] {
-        try await repo.getAlbums(forGenre: genre)
-    }
-    
-    func search(query: String) async throws -> SearchResults {
-        try await repo.search(query: query)
-    }
-    
-    func getCoverImage(for id: String, size: Int = 300) async -> UIImage? {
-        await coverCache.getImage(for: id, size: size)
-    }
-    
-    func performSync(force: Bool = false) async throws {
-        try await sync.performSmartSync(force: force)
-    }
-    
-    func cancelSync() async {
-        await sync.cancelSync()
-    }
-    
-    func syncAlbumDetails(albumId: String) async throws {
-        try await sync.syncAlbumDetails(albumId: albumId)
-    }
+    func getAlbums(offset: Int = 0, limit: Int = 100) async throws -> [AlbumDTO] { try await repo.getAlbums(offset: offset, limit: limit) }
+    func getArtists(offset: Int = 0, limit: Int = 100) async throws -> [ArtistDTO] { try await repo.getArtists(offset: offset, limit: limit) }
+    func getGenres() async throws -> [GenreDTO] { try await repo.getGenres() }
+    func getAlbum(id: String) async throws -> [AlbumDTO]? { return nil } // Correction: Repo signature returns AlbumDTO?
+    func getAlbum(id: String) async throws -> AlbumDTO? { try await repo.getAlbum(id: id) }
+    func getSongs(for albumId: String) async throws -> [SongDTO] { try await repo.getSongs(for: albumId) }
+    func getArtist(id: String) async throws -> ArtistDTO? { try await repo.getArtist(id: id) }
+    func getAlbums(forArtist artistId: String) async throws -> [AlbumDTO] { try await repo.getAlbums(forArtist: artistId) }
+    func getAlbums(forGenre genre: String) async throws -> [AlbumDTO] { try await repo.getAlbums(forGenre: genre) }
+    func search(query: String) async throws -> SearchResults { try await repo.search(query: query) }
+    func getCoverImage(for id: String, size: Int = 300) async -> UIImage? { await coverCache.getImage(for: id, size: size) }
+    func performSync(force: Bool = false) async throws { try await sync.performSmartSync(force: force) }
+    func cancelSync() async { await sync.cancelSync() }
+    func syncAlbumDetails(albumId: String) async throws { try await sync.syncAlbumDetails(albumId: albumId) }
 }
 
-// (PlaybackEnvironment and DownloadEnvironment remain unchanged)
 @Observable @MainActor
 final class PlaybackEnvironment {
     private let engine: AudioEngine

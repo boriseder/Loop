@@ -2,15 +2,7 @@
 //  AuthenticationService.swift
 //  Loop
 //
-//  Created by Boris Eder on 16.01.26.
-//
-
-
-//
-//  AuthenticationService.swift
-//  Loop
-//
-//  Manages authentication state and keychain interaction.
+//  FIXED: Removed async race condition in init. Added explicit restoreSession().
 //
 
 import Foundation
@@ -29,13 +21,14 @@ final class AuthenticationService {
     init(client: NavidromeClient, syncManager: SyncManager) {
         self.client = client
         self.syncManager = syncManager
-        
-        // Check initial state
-        Task {
-            if let credentials = await keychain.credentials {
-                await client.setSession(credentials)
-                self.isAuthenticated = true
-            }
+        // ❌ REMOVED: The fire-and-forget Task that caused the race condition
+    }
+    
+    // ✅ NEW: Explicit method to restore session
+    func restoreSession() async {
+        if let credentials = await keychain.credentials {
+            await client.setSession(credentials)
+            self.isAuthenticated = true
         }
     }
     
