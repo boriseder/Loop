@@ -86,16 +86,14 @@ struct LibraryView: View {
                     Button { showSettings = true } label: { Label("Settings", systemImage: "gear") }
                     Divider()
                     Toggle(isOn: $showDownloadedOnly) { Label("Downloaded Only", systemImage: "arrow.down.circle") }
+                    Button {
+                        router.navigateToDownloads()
+                    } label: {
+                        Label("DownloadsView", systemImage: "arrow.down.circle")
+                    }
+
                 } label: {
                     Image(systemName: "line.3.horizontal.decrease.circle")
-                }
-            }
-            
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    router.navigateToDownloads()
-                } label: {
-                    Image(systemName: "arrow.down.circle")
                 }
             }
         }
