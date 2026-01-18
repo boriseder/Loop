@@ -2,15 +2,7 @@
 //  SyncProgressView.swift
 //  Loop
 //
-//  Created by Boris Eder on 16.01.26.
-//
-
-
-//
-//  SyncProgressView.swift
-//  Loop
-//
-//  Modal overlay showing sync progress
+//  Fixed: Consistent size regardless of text length
 //
 
 import SwiftUI
@@ -19,18 +11,19 @@ struct SyncProgressView: View {
     let progress: SyncProgress
     let onCancel: () -> Void
     
+    @State private var rotate = false
+
     var body: some View {
         ZStack {
-            // Dimmed background
             Color.black.opacity(0.4)
                 .ignoresSafeArea()
             
-            // Progress card
+            // Progress card with FIXED dimensions
             VStack(spacing: 24) {
                 // Icon
                 ZStack {
                     Circle()
-                        .fill(Color.accentColor.opacity(0.2))
+                        .fill(Color.accentColor.opacity(0.8))
                         .frame(width: 80, height: 80)
                     
                     if case .complete = progress.phase {
@@ -43,15 +36,24 @@ struct SyncProgressView: View {
                             .font(.system(size: 50))
                             .foregroundStyle(.red)
                     } else {
-                        ProgressView()
-                            .scaleEffect(1.5)
-                            .tint(.primary)
+                        Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+                            .font(.system(size: 50))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .rotationEffect(.degrees(rotate ? 360 : 0))
+                            .animation(
+                                .linear(duration: 4).repeatForever(autoreverses: false),
+                                value: rotate
+                            )
+                            .onAppear {
+                                rotate = true
+                            }
                     }
                 }
+                //
                 .animation(.spring(response: 0.5), value: progress.phase)
                 
                 // Progress bar
-                VStack(spacing: 8) {
+                VStack(spacing: 4) {
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
                             // Background
@@ -74,42 +76,51 @@ struct SyncProgressView: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                .frame(maxWidth: 280)
+                .frame(width: 280) // ✅ Fixed width
                 
-                // Status text
+                // Status text with FIXED HEIGHT
                 VStack(spacing: 4) {
                     Text(progress.displayText)
                         .font(.headline)
                         .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .frame(height: 16, alignment: .center) // ✅ Fixed height for 2 lines
                     
-                    if case .failed = progress.phase {
-                        Text("Check your connection and try again")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    // Error message (fixed space)
+                    Group {
+                        if case .failed = progress.phase {
+                            Text("Check your connection and try again")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text(" ") // Invisible placeholder to maintain spacing
+                                .font(.caption)
+                        }
                     }
+                    .frame(height: 24) // ✅ Fixed height for error message
                 }
+                .frame(width: 280) // ✅ Fixed width
                 
-                // Cancel button (only during sync)
-                if progress.isActive {
-                    Button("Cancel", role: .destructive) {
-                        onCancel()
+                // Cancel button (fixed space)
+                Group {
+                    if progress.isActive {
+                        Button("Cancel", role: .destructive) {
+                            onCancel()
+                        }
+                        .font(.subheadline)
+                    } else {
+                        // Invisible placeholder
+                        Text(" ")
+                            .font(.subheadline)
                     }
-                    .font(.subheadline)
-                    .padding(.top, 8)
                 }
+                .frame(height: 16) // ✅ Fixed height for button area
             }
-            .padding(32)
-            .background(.regularMaterial)
-            .clipShape(RoundedRectangle(cornerRadius: 20))
-            .shadow(color: .black.opacity(0.3), radius: 20)
-            .padding(40)
+            .padding(16)
+            .frame(width: 312) // ✅ Total fixed width (280 + 16*2)
+            .background(.ultraThinMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .shadow(color: .black.opacity(0.3), radius: 16)
         }
     }
-}
-
-#Preview {
-    SyncProgressView(
-        progress: SyncProgress(phase: .albums(current: 234, total: 491)),
-        onCancel: {}
-    )
 }

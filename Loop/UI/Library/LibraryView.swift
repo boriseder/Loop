@@ -66,6 +66,7 @@ struct LibraryView: View {
                         Label("Force Sync", systemImage: "arrow.triangle.2.circlepath")
                     }
                     Button { showSettings = true } label: { Label("Settings", systemImage: "gear") }
+                    Button { router.navigateToDownloads() } label: { Label("DownloadView", systemImage: "arrow.down.circle") }
                     Divider()
                     Toggle(isOn: $showDownloadedOnly) { Label("Downloaded Only", systemImage: "arrow.down.circle") }
                 } label: {
@@ -74,11 +75,6 @@ struct LibraryView: View {
             }
             
             ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    router.navigateToDownloads()
-                } label: {
-                    Image(systemName: "arrow.down.circle")
-                }
             }
         }
         .onAppear {

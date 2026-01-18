@@ -15,7 +15,6 @@ final class Router {
     
     enum Destination: Hashable, Codable {
         case albumDetail(albumId: String)
-        // ✅ UPDATE: Carry filter state
         case artistDetail(artistId: String, showDownloadedOnly: Bool)
         case genreDetail(genreName: String, showDownloadedOnly: Bool)
         case downloads
