@@ -56,32 +56,25 @@ struct AuthenticatedRoot: View {
                         vm: GenreDetailViewModel(genreName: name, repo: container.repo),
                         container: container
                     )
-                    
-                case .downloads:
-                    DownloadsView(
-                        repo: container.repo,
-                        downloader: container.downloadManager,
-                        cache: container.coverCache
-                    )
                 }
             }
-        }
-        .environment(router)
-        .overlay(alignment: .bottom) {
-            if container.audioEngine.currentSong != nil {
-                MiniPlayerView(audio: container.audioEngine)
-                    .onTapGesture {
-                        isPlayerPresented = true
-                    }
+            .environment(router)
+            .overlay(alignment: .bottom) {
+                if container.audioEngine.currentSong != nil {
+                    MiniPlayerView(audio: container.audioEngine)
+                        .onTapGesture {
+                            isPlayerPresented = true
+                        }
+                }
             }
-        }
-        .sheet(isPresented: $isPlayerPresented) {
-            PlayerView(
-                audio: container.audioEngine, // ✅ Passed audio
-                cache: container.coverCache,  // ✅ Passed cache
-                isPresented: $isPlayerPresented
-            )
-            .presentationDragIndicator(.visible)
+            .sheet(isPresented: $isPlayerPresented) {
+                PlayerView(
+                    audio: container.audioEngine, // ✅ Passed audio
+                    cache: container.coverCache,  // ✅ Passed cache
+                    isPresented: $isPlayerPresented
+                )
+                .presentationDragIndicator(.visible)
+            }
         }
     }
 }

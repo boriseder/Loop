@@ -12,7 +12,12 @@ final class LibraryViewModel {
     
     var state: State = .loading
     var scope: LibraryScope = .albums {
-        didSet { Task { await loadData() } }
+        didSet {
+            // Cancel previous load
+            loadTask?.cancel()
+            // Start new load
+            loadTask = Task { await loadData() }
+        }
     }
     
     var albums: [AlbumDTO] = []
@@ -24,37 +29,60 @@ final class LibraryViewModel {
     private let repo: MusicRepository
     private let syncManager: SyncManager
     
+    // Task tracking for cancellation
+    private var loadTask: Task<Void, Never>?
+    
     init(repo: MusicRepository, syncManager: SyncManager) {
         self.repo = repo
         self.syncManager = syncManager
     }
     
     func loadData() async {
-        // Optimistic loading - don't show spinner if we already have data
-        if albums.isEmpty && artists.isEmpty { state = .loading }
+        // Only show loading spinner if we have no data
+        if albums.isEmpty && artists.isEmpty && genres.isEmpty {
+            state = .loading
+        }
         
         do {
             switch scope {
             case .albums:
-                albums = try repo.getAlbums(limit: 500)
-                state = albums.isEmpty ? .empty : .content
+                let loaded = try await repo.getAlbums(limit: 500)
+                
+                // Check if task was cancelled
+                guard !Task.isCancelled else { return }
+                
+                albums = loaded
+                state = loaded.isEmpty ? .empty : .content
+                
             case .artists:
-                artists = try repo.getArtists(limit: 500)
-                state = artists.isEmpty ? .empty : .content
+                let loaded = try await repo.getArtists(limit: 500)
+                
+                guard !Task.isCancelled else { return }
+                
+                artists = loaded
+                state = loaded.isEmpty ? .empty : .content
+                
             case .genres:
-                genres = try repo.getGenres()
-                state = genres.isEmpty ? .empty : .content
+                let loaded = try await repo.getGenres()
+                
+                guard !Task.isCancelled else { return }
+                
+                genres = loaded
+                state = loaded.isEmpty ? .empty : .content
             }
         } catch {
+            guard !Task.isCancelled else { return }
             state = .error(error.localizedDescription)
         }
     }
     
     func refresh() {
         syncManager.startSmartSync(force: true)
+        
+        // Reload UI after short delay to let sync start
         Task {
-            // Allow sync to start writing, then reload UI
             try? await Task.sleep(for: .seconds(1))
+            guard !Task.isCancelled else { return }
             await loadData()
         }
     }

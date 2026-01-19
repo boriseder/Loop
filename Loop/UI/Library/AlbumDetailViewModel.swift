@@ -6,12 +6,15 @@ final class AlbumDetailViewModel {
     var album: AlbumDTO?
     var songs: [SongDTO] = []
     var isDownloading = false
+    var downloadProgress: Double = 0.0
     
     private let albumId: String
     private let repo: MusicRepository
     private let sync: SyncManager
-    private let downloader: DownloadManager
+    public let downloader: DownloadManager
     private let audio: AudioEngine
+    
+    private var downloadTask: Task<Void, Never>?
     
     init(albumId: String, repo: MusicRepository, sync: SyncManager, downloader: DownloadManager, audio: AudioEngine) {
         self.albumId = albumId
@@ -23,14 +26,16 @@ final class AlbumDetailViewModel {
     
     func load() async {
         do {
-            self.album = try repo.getAlbum(id: albumId)
-            self.songs = try repo.getSongs(for: albumId)
+            // Load from DB first (fast)
+            self.album = try await repo.getAlbum(id: albumId)
+            self.songs = try await repo.getSongs(for: albumId)
             
-            // Check if we need to fetch details from server (background)
+            // If no songs, fetch from server in background
             if songs.isEmpty {
                 try? await sync.syncAlbumDetails(albumId)
+                
                 // Reload after sync
-                self.songs = try repo.getSongs(for: albumId)
+                self.songs = try await repo.getSongs(for: albumId)
             }
         } catch {
             print("Error loading album: \(error)")
@@ -43,13 +48,50 @@ final class AlbumDetailViewModel {
     }
     
     func downloadAlbum() {
+        // Cancel any existing download
+        downloadTask?.cancel()
+        
         isDownloading = true
-        Task {
+        downloadProgress = 0.0
+        
+        downloadTask = Task {
+            let total = songs.count
+            var completed = 0
+            
             for song in songs {
-                await downloader.downloadSong(song: song)
+                guard !Task.isCancelled else {
+                    isDownloading = false
+                    return
+                }
+                
+                // Only download if not already downloaded
+                if !downloader.isDownloaded(songId: song.id) {
+                    downloader.downloadSong(song: song)
+                    
+                    // Wait for this song to complete before starting next
+                    // This prevents overwhelming the system
+                    while downloader.activeDownloads[song.id] != nil {
+                        try? await Task.sleep(for: .milliseconds(100))
+                        guard !Task.isCancelled else {
+                            isDownloading = false
+                            return
+                        }
+                    }
+                }
+                
+                completed += 1
+                downloadProgress = Double(completed) / Double(total)
             }
+            
             isDownloading = false
+            downloadProgress = 1.0
         }
+    }
+    
+    func cancelDownload() {
+        downloadTask?.cancel()
+        isDownloading = false
+        downloadProgress = 0.0
     }
     
     func isDownloaded() -> Bool {

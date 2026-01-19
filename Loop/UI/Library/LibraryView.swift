@@ -16,35 +16,53 @@ struct LibraryView: View {
             .pickerStyle(.segmented)
             .padding()
             
-            // Sync Indicator
-            if container.syncManager.isSyncing {
-                HStack {
-                    ProgressView().scaleEffect(0.6)
-                    Text("Syncing library...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.bottom, 4)
-            }
-            
             // Content
             switch viewModel.state {
             case .loading:
-                ProgressView().frame(maxHeight: .infinity)
+                ProgressView()
+                    .frame(maxHeight: .infinity)
+                
             case .error(let msg):
-                ContentUnavailableView("Error", systemImage: "exclamationmark.triangle", description: Text(msg))
+                ContentUnavailableView(
+                    "Error",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text(msg)
+                )
+                
             case .empty:
-                ContentUnavailableView("Empty Library", systemImage: "music.note", description: Text("Sync your music to get started"))
+                ContentUnavailableView(
+                    "Empty Library",
+                    systemImage: "music.note",
+                    description: Text("Sync your music to get started")
+                )
+                
             case .content:
                 ScrollView {
                     contentGrid
-                        .padding(.bottom, 100) // Spacing for MiniPlayer
+                        .padding(.bottom, 100)
                 }
-                .refreshable { viewModel.refresh() }
+                .refreshable {
+                    viewModel.refresh()
+                }
             }
         }
         .navigationTitle("Library")
-        .task { await viewModel.loadData() }
+        .overlay(alignment: .bottom) {
+            // Sync Progress Overlay
+            if container.syncManager.progress.isActive {
+                SyncProgressView(
+                    progress: container.syncManager.progress,
+                    onCancel: {
+                        container.syncManager.cancelSync()
+                    }
+                )
+                .transition(.opacity.combined(with: .scale))
+            }
+        }
+        .animation(.easeInOut, value: container.syncManager.progress.isActive)
+        .task {
+            await viewModel.loadData()
+        }
     }
     
     @ViewBuilder

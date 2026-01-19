@@ -9,7 +9,6 @@ final class Router {
         case albumDetail(albumId: String)
         case artistDetail(artistId: String, showDownloaded: Bool = false)
         case genreDetail(name: String, showDownloaded: Bool = false)
-        case downloads
     }
     
     func navigateToAlbum(_ id: String) {
@@ -22,9 +21,5 @@ final class Router {
     
     func navigateToGenre(_ name: String) {
         path.append(Destination.genreDetail(name: name))
-    }
-    
-    func navigateToDownloads() {
-        path.append(Destination.downloads)
     }
 }

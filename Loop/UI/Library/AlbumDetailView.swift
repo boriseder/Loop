@@ -2,7 +2,7 @@ import SwiftUI
 
 struct AlbumDetailView: View {
     @State var vm: AlbumDetailViewModel
-    let cache: CoverArtCache // ✅ Added explicit dependency
+    let cache: CoverArtCache
     
     var body: some View {
         ScrollView {
@@ -10,7 +10,7 @@ struct AlbumDetailView: View {
                 // Header
                 if let album = vm.album {
                     VStack(spacing: 12) {
-                        AlbumHeaderImage(coverId: album.coverArtId, cache: cache) // ✅ Pass cache
+                        AlbumHeaderImage(coverId: album.coverArtId, cache: cache)
                         
                         Text(album.title)
                             .font(.title2.bold())
@@ -22,6 +22,7 @@ struct AlbumDetailView: View {
                         
                         // Controls
                         HStack(spacing: 20) {
+                            // Play Button
                             Button {
                                 Task {
                                     if let first = vm.songs.first {
@@ -36,22 +37,35 @@ struct AlbumDetailView: View {
                                     .foregroundStyle(.white)
                                     .clipShape(Capsule())
                             }
+                            .disabled(vm.songs.isEmpty)
                             
+                            // Download Button
                             Button {
-                                vm.downloadAlbum()
+                                if vm.isDownloading {
+                                    vm.cancelDownload()
+                                } else if vm.isDownloaded() {
+                                    // Already downloaded - could show options
+                                } else {
+                                    vm.downloadAlbum()
+                                }
                             } label: {
                                 ZStack {
-                                    Circle().fill(.ultraThinMaterial).frame(width: 50, height: 50)
+                                    Circle()
+                                        .fill(.ultraThinMaterial)
+                                        .frame(width: 50, height: 50)
+                                    
                                     if vm.isDownloading {
-                                        ProgressView()
+                                        // Show progress
+                                        CircularProgressView(progress: vm.downloadProgress)
+                                            .frame(width: 30, height: 30)
                                     } else if vm.isDownloaded() {
-                                        Image(systemName: "checkmark").foregroundStyle(.green)
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.green)
                                     } else {
-                                        Image(systemName: "arrow.down")
+                                        Image(systemName: "arrow.down.circle")
                                     }
                                 }
                             }
-                            .disabled(vm.isDownloading)
                         }
                     }
                     .padding(.top)
@@ -63,7 +77,7 @@ struct AlbumDetailView: View {
                         Button {
                             Task { await vm.play(song: song) }
                         } label: {
-                            SongRow(song: song)
+                            SongRow(song: song, isDownloaded: vm.downloader.isDownloaded(songId: song.id))
                         }
                         .buttonStyle(.plain)
                         Divider().padding(.leading, 16)
@@ -81,7 +95,7 @@ struct AlbumDetailView: View {
 
 struct AlbumHeaderImage: View {
     let coverId: String?
-    let cache: CoverArtCache // ✅ Explicit dependency
+    let cache: CoverArtCache
     
     var body: some View {
         AsyncCoverImage(coverId: coverId, size: 600, cache: cache)
@@ -93,6 +107,7 @@ struct AlbumHeaderImage: View {
 
 struct SongRow: View {
     let song: SongDTO
+    let isDownloaded: Bool
     
     var body: some View {
         HStack(spacing: 16) {
@@ -102,10 +117,18 @@ struct SongRow: View {
                 .frame(width: 25, alignment: .trailing)
             
             VStack(alignment: .leading) {
-                Text(song.title).font(.body).lineLimit(1)
+                Text(song.title)
+                    .font(.body)
+                    .lineLimit(1)
             }
             
             Spacer()
+            
+            if isDownloaded {
+                Image(systemName: "arrow.down.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             
             Text(formatDuration(song.duration))
                 .font(.caption)
@@ -125,14 +148,16 @@ struct SongRow: View {
 struct AsyncCoverImage: View {
     let coverId: String?
     let size: Int
-    let cache: CoverArtCache // ✅ Explicit dependency
+    let cache: CoverArtCache
     
     @State private var image: UIImage?
     
     var body: some View {
         Group {
             if let image {
-                Image(uiImage: image).resizable().aspectRatio(contentMode: .fill)
+                Image(uiImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
             } else {
                 Color.secondary.opacity(0.1)
                     .overlay(Image(systemName: "music.note"))
@@ -142,6 +167,24 @@ struct AsyncCoverImage: View {
             if let coverId {
                 image = await cache.image(for: coverId, size: size)
             }
+        }
+    }
+}
+
+// MARK: - Circular Progress View
+struct CircularProgressView: View {
+    let progress: Double
+    
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.secondary.opacity(0.3), lineWidth: 3)
+            
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.linear(duration: 0.3), value: progress)
         }
     }
 }

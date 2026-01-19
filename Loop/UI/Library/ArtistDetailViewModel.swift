@@ -20,8 +20,8 @@ final class ArtistDetailViewModel {
     
     func load() async {
         do {
-            self.artist = try repo.getArtist(id: artistId)
-            let allAlbums = try repo.getAlbums(forArtist: artistId)
+            self.artist = try await repo.getArtist(id: artistId)
+            let allAlbums = try await repo.getAlbums(forArtist: artistId)
             
             if showDownloadedOnly {
                 // Filter albums that have at least one song downloaded
@@ -43,7 +43,7 @@ final class ArtistDetailViewModel {
     
     private func isAlbumDownloaded(_ albumId: String) async -> Bool {
         // Check if any song in the album exists on disk
-        guard let songs = try? repo.getSongs(for: albumId) else { return false }
+        guard let songs = try? await repo.getSongs(for: albumId) else { return false }
         return songs.contains { downloader.isDownloaded(songId: $0.id) }
     }
 }

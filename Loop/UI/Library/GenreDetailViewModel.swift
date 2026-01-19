@@ -15,7 +15,7 @@ final class GenreDetailViewModel {
     
     func load() async {
         do {
-            self.albums = try repo.getAlbums(forGenre: genreName)
+            self.albums = try await repo.getAlbums(forGenre: genreName)
         } catch {
             print("Error loading genre: \(error)")
         }

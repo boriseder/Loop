@@ -2,13 +2,12 @@ import Foundation
 import SwiftData
 import OSLog
 
-/// A dedicated actor for background database writes.
+// MARK: - Background Sync Actor (Proper isolation)
 @ModelActor
 actor BackgroundSyncActor {
     private let logger = Logger(subsystem: "com.loopapp", category: "SyncWorker")
     
     func saveAlbums(_ remoteAlbums: [RemoteAlbum]) throws {
-        // SwiftData Context inside ModelActor is safe to use here
         var artistCache: [String: Artist] = [:]
         
         for remote in remoteAlbums {
@@ -41,7 +40,7 @@ actor BackgroundSyncActor {
         let artist = try getOrCreateArtist(id: details.artistId, name: details.artist, cache: &artistCache)
         
         let album = try getOrCreateAlbum(from: details, artist: artist)
-        album.coverArtId = details.coverArt // Ensure detail updates cover if needed
+        album.coverArtId = details.coverArt
         
         for remoteSong in songs {
             try saveOrUpdateSong(remoteSong, album: album, artist: artist)
@@ -49,7 +48,7 @@ actor BackgroundSyncActor {
         try modelContext.save()
     }
     
-    // MARK: - Private Helpers (Internal to Actor)
+    // MARK: - Private Helpers
     
     private func getOrCreateArtist(id: String, name: String, cache: inout [String: Artist]) throws -> Artist {
         if let cached = cache[id] { return cached }
@@ -85,7 +84,6 @@ actor BackgroundSyncActor {
         return newAlbum
     }
     
-    // Overload for Detail (could be unified but keeping simple)
     private func getOrCreateAlbum(from remote: RemoteAlbumDetail, artist: Artist) throws -> Album {
         let id = remote.id
         let predicate = #Predicate<Album> { $0.id == id }
@@ -120,82 +118,133 @@ actor BackgroundSyncActor {
     }
 }
 
+// MARK: - Sync Manager (MainActor ONLY for @Observable state)
 @Observable @MainActor
 final class SyncManager {
+    // MARK: - Published State
+    private(set) var progress = SyncProgress(phase: .idle)
+    
+    var isSyncing: Bool { progress.isActive }
+    var statusMessage: String? {
+        progress.isActive ? progress.displayText : nil
+    }
+    
+    // MARK: - Private
     private let client: NavidromeClient
     private let container: ModelContainer
     private let logger = Logger(subsystem: "com.loopapp", category: "Sync")
     
-    // Public State
-    var isSyncing = false
-    var statusMessage: String?
+    private var syncTask: Task<Void, Never>?
     
     init(client: NavidromeClient, container: ModelContainer) {
         self.client = client
         self.container = container
     }
     
+    // MARK: - Public API
     func startSmartSync(force: Bool = false) {
-        guard !isSyncing else { return }
+        // Cancel existing sync
+        syncTask?.cancel()
         
-        Task {
-            isSyncing = true
-            statusMessage = "Syncing..."
-            
-            do {
-                // Initialize background actor with the shared container
-                let worker = BackgroundSyncActor(modelContainer: container)
-                
-                // 1. Fetch Albums
-                var offset = 0
-                let pageSize = 200 // Increased batch size
-                var hasMore = true
-                
-                while hasMore {
-                    let params = ["type": "newest", "offset": "\(offset)", "size": "\(pageSize)"]
-                    let response: SubsonicResponse = try await client.fetch("getAlbumList2", params: params)
-                    
-                    if let albums = response.subsonicResponse.albumList2?.album, !albums.isEmpty {
-                        try await worker.saveAlbums(albums)
-                        offset += pageSize
-                        if albums.count < pageSize { hasMore = false }
-                    } else {
-                        hasMore = false
-                    }
-                }
-                
-                // 2. Fetch Genres
-                let genreResponse: SubsonicGenresResponse = try await client.fetch("getGenres")
-                if let genres = genreResponse.subsonicResponse.genres?.genre {
-                    try await worker.saveGenres(genres)
-                }
-                
-                statusMessage = nil
-                logger.info("Sync completed successfully")
-                
-            } catch {
-                logger.error("Sync failed: \(error)")
-                statusMessage = "Sync failed"
-                // Auto-hide error after delay
-                try? await Task.sleep(for: .seconds(3))
-                statusMessage = nil
-            }
-            
-            isSyncing = false
+        // Start new sync in background
+        syncTask = Task.detached(priority: .userInitiated) { [weak self] in
+            await self?.performSync()
         }
     }
     
+    func cancelSync() {
+        syncTask?.cancel()
+        syncTask = nil
+        Task { @MainActor in
+            self.progress = SyncProgress(phase: .idle)
+        }
+    }
+    
+    // MARK: - Background Sync Logic
+    private func performSync() async {
+        await updateProgress(.albums(current: 0, total: 0))
+        
+        do {
+            let worker = BackgroundSyncActor(modelContainer: container)
+            
+            // 1. Fetch Albums (paginated)
+            var offset = 0
+            let pageSize = 200
+            var totalAlbums = 0
+            var hasMore = true
+            
+            while hasMore && !Task.isCancelled {
+                let params = ["type": "newest", "offset": "\(offset)", "size": "\(pageSize)"]
+                let response: SubsonicResponse = try await client.fetch("getAlbumList2", params: params)
+                
+                if let albums = response.subsonicResponse.albumList2?.album, !albums.isEmpty {
+                    try await worker.saveAlbums(albums)
+                    totalAlbums += albums.count
+                    offset += pageSize
+                    
+                    await updateProgress(.albums(current: totalAlbums, total: totalAlbums + 100))
+                    
+                    if albums.count < pageSize { hasMore = false }
+                } else {
+                    hasMore = false
+                }
+            }
+            
+            guard !Task.isCancelled else {
+                await updateProgress(.idle)
+                return
+            }
+            
+            // 2. Fetch Genres
+            await updateProgress(.genres)
+            let genreResponse: SubsonicGenresResponse = try await client.fetch("getGenres")
+            if let genres = genreResponse.subsonicResponse.genres?.genre {
+                try await worker.saveGenres(genres)
+            }
+            
+            guard !Task.isCancelled else {
+                await updateProgress(.idle)
+                return
+            }
+            
+            // 3. Complete
+            await updateProgress(.complete)
+            logger.info("Sync completed: \(totalAlbums) albums")
+            
+            // Auto-clear after 2 seconds
+            try? await Task.sleep(for: .seconds(2))
+            await updateProgress(.idle)
+            
+        } catch {
+            guard !Task.isCancelled else {
+                await updateProgress(.idle)
+                return
+            }
+            
+            logger.error("Sync failed: \(error.localizedDescription)")
+            await updateProgress(.failed(error: error.localizedDescription))
+            
+            // Auto-clear error after 5 seconds
+            try? await Task.sleep(for: .seconds(5))
+            await updateProgress(.idle)
+        }
+    }
+    
+    @MainActor
+    private func updateProgress(_ phase: SyncProgress.Phase) {
+        self.progress = SyncProgress(phase: phase)
+    }
+    
+    // MARK: - Album Detail Sync
     func syncAlbumDetails(_ albumId: String) async throws {
         let worker = BackgroundSyncActor(modelContainer: container)
         
-        // Fetch
         let response: SubsonicGetAlbumResponse = try await client.fetch("getAlbum", params: ["id": albumId])
         guard let details = response.subsonicResponse.album,
               let songs = response.subsonicResponse.album?.song else {
             return
         }
         
-        // Write in background
         try await worker.saveAlbumDetails(details: details, songs: songs)
     }
 }
