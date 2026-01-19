@@ -146,10 +146,10 @@ struct AlbumDetailView: View {
                             
                             Spacer()
                             
-                            if downloads.isPinned(songId: song.id) {
-                                Image(systemName: "arrow.down.circle.fill")
+                            if downloads.idDownloaded(songId: song.id) {
+                                Image(systemName: "checkmark.circle.fill")
                                     .font(.caption)
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(Color.green)
                             }
                             
                             Text(formatDuration(song.duration))

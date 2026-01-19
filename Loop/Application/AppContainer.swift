@@ -181,13 +181,25 @@ final class PlaybackEnvironment {
 @Observable @MainActor
 final class DownloadEnvironment {
     private let manager: DownloadManager
+    
     var activeDownloads: Set<String> { manager.activeDownloads }
+    
     var storage: DownloadStorage { manager.storage }
+    
     init(manager: DownloadManager) { self.manager = manager }
-    func isPinned(songId: String) -> Bool { manager.isPinned(songId: songId) }
+    
+    func isDownloading(songId: String) -> Bool {
+        activeDownloads.contains(songId)
+    }
+    
+    func idDownloaded(songId: String) -> Bool { manager.isPinned(songId: songId) }
+    
     func isAlbumFullyDownloaded(songIds: [String]) -> Bool { manager.isAlbumFullyDownloaded(songIds: songIds) }
+    
     func isDownloading(albumId: String) -> Bool { manager.isDownloading(albumId: albumId) }
+    
     func download(song: SongDTO) async { await manager.downloadSong(id: song.id, path: song.path, coverId: song.coverArtId) }
+    
     func downloadAlbum(albumId: String, songs: [SongDTO]) async {
         await manager.downloadAlbum(albumId: albumId, songs: songs.map { ($0.id, $0.path, $0.coverArtId) })
     }
