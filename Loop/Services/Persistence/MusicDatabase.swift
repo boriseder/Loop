@@ -1,10 +1,3 @@
-//
-//  MusicDatabase.swift
-//  Loop
-//
-//  FIXED: Ensured all models (Album, Artist, Genre, Song) are in the Schema
-//
-
 import Foundation
 import SwiftData
 
@@ -13,24 +6,24 @@ final class MusicDatabase {
     let container: ModelContainer
     
     init() {
-        // ✅ CRITICAL: Ensure Loop.Artist is included here!
         let schema = Schema([
-            Loop.Album.self,
-            Loop.Artist.self,
-            Loop.Genre.self,
-            Loop.Song.self
+            Album.self,
+            Artist.self,
+            Genre.self,
+            Song.self
         ])
         
+        // Disable iCloud syncing for local cache DB to improve performance/reliability
         let modelConfiguration = ModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: false
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .none
         )
         
         do {
             container = try ModelContainer(for: schema, configurations: [modelConfiguration])
-            print("✅ MusicDatabase: Container ready")
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            fatalError("Failed to initialize MusicDatabase: \(error)")
         }
     }
 }

@@ -1,150 +1,66 @@
-//
-//  KeychainStorage.swift
-//  Loop
-//
-//  FIXED: Added .whenUnlocked access control for security
-//
-
 import Foundation
 import Security
 
 actor KeychainStorage {
     static let shared = KeychainStorage()
-    
     private let service = "at.amtabor.loop"
     
-    private enum Key: String {
-        case baseURL = "baseURL"
-        case username = "username"
-        case password = "password"
+    func save(credentials: Credentials) throws {
+        try saveItem(credentials.baseURL, for: "baseURL")
+        try saveItem(credentials.username, for: "username")
+        try saveItem(credentials.password, for: "password")
     }
     
-    // MARK: - Public Interface
-    
     var credentials: Credentials? {
-        get async {
-            guard let url = await getString(.baseURL),
-                  let user = await getString(.username),
-                  let pass = await getString(.password) else {
-                return nil
-            }
+        get {
+            guard let url = getItem("baseURL"),
+                  let user = getItem("username"),
+                  let pass = getItem("password") else { return nil }
             return Credentials(baseURL: url, username: user, password: pass)
         }
     }
     
-    func save(credentials: Credentials) async throws {
-        try await setString(credentials.baseURL, for: .baseURL)
-        try await setString(credentials.username, for: .username)
-        try await setString(credentials.password, for: .password)
+    func clear() {
+        deleteItem("baseURL")
+        deleteItem("username")
+        deleteItem("password")
     }
     
-    func clear() async {
-        await deleteString(.baseURL)
-        await deleteString(.username)
-        await deleteString(.password)
-    }
-    
-    // MARK: - Private Helpers
-    
-    private func getString(_ key: Key) async -> String? {
+    private func saveItem(_ value: String, for key: String) throws {
+        guard let data = value.data(using: .utf8) else { return }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue,
-            kSecReturnData as String: true
-        ]
-        
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let string = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-        
-        return string
-    }
-    
-    private func setString(_ value: String, for key: Key) async throws {
-        guard let data = value.data(using: .utf8) else {
-            throw KeychainError.encodingFailed
-        }
-        
-        // Try to update first
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue
-        ]
-        
-        // ✅ FIX: Added access control - only accessible when device unlocked
-        let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlocked
-        ]
-        
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        
-        if updateStatus == errSecItemNotFound {
-            // Item doesn't exist, add it
-            var addQuery = query
-            addQuery[kSecValueData as String] = data
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked // ✅ Security fix
-            
-            let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
-            guard addStatus == errSecSuccess else {
-                throw KeychainError.saveFailed(status: addStatus)
-            }
-        } else if updateStatus != errSecSuccess {
-            throw KeychainError.saveFailed(status: updateStatus)
-        }
-    }
-    
-    private func deleteString(_ key: Key) async {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data
         ]
         
         SecItemDelete(query as CFDictionary)
+        SecItemAdd(query as CFDictionary, nil)
     }
-}
-
-// MARK: - Supporting Types
-
-struct Credentials: Sendable {
-    let baseURL: String
-    let username: String
-    let password: String
     
-    var tokenParams: [String: String] {
-        let salt = String((0..<6).map { _ in
-            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".randomElement()!
-        })
-        let token = "\(password)\(salt)".md5
-        return [
-            "u": username,
-            "t": token,
-            "s": salt,
-            "v": "1.16.1",
-            "c": "iOSClient",
-            "f": "json"
+    private func getItem(_ key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        
+        var result: AnyObject?
+        SecItemCopyMatching(query as CFDictionary, &result)
+        
+        guard let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
     }
-}
-
-enum KeychainError: LocalizedError {
-    case encodingFailed
-    case saveFailed(status: OSStatus)
     
-    var errorDescription: String? {
-        switch self {
-        case .encodingFailed:
-            return "Failed to encode credential data"
-        case .saveFailed(let status):
-            return "Keychain save failed with status: \(status)"
-        }
+    private func deleteItem(_ key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        SecItemDelete(query as CFDictionary)
     }
 }

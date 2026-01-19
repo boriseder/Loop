@@ -1,117 +1,42 @@
-//
-//  ArtistDetailView.swift
-//  Loop
-//
-//  FIXED: Added downloaded filter support
-//
-
 import SwiftUI
 
 struct ArtistDetailView: View {
-    let artistId: String
-    let showDownloadedOnly: Bool // ✅ Added param
-    
-    @Environment(MusicEnvironment.self) private var music
-    @State private var viewModel: ArtistDetailViewModel?
+    @State var vm: ArtistDetailViewModel
+    let container: AppContainer // Needed to pass to children
     
     var body: some View {
         ScrollView {
-            if let vm = viewModel {
-                VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 20) {
+                // Header
+                HStack(spacing: 16) {
+                    Image(systemName: "music.mic.circle.fill")
+                        .font(.system(size: 80))
+                        .foregroundStyle(Color.accentColor.opacity(0.8))
                     
-                    // MARK: - Header
-                    HStack(spacing: 16) {
-                        Image(systemName: "music.mic.circle.fill")
-                            .font(.system(size: 80))
-                            .foregroundStyle(Color.accentColor.opacity(0.8))
-                        
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Artist")
-                                .font(.caption)
-                                .fontWeight(.bold)
-                                .foregroundStyle(.secondary)
-                            
-                            Text(vm.artist?.name ?? "Loading...")
-                                .font(.title)
-                                .fontWeight(.bold)
-                                .lineLimit(2)
-                            
-                            Text("\(vm.albums.count) Albums")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            
-                            // ✅ Indicator
-                            if showDownloadedOnly {
-                                Label("Downloaded Only", systemImage: "arrow.down.circle.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(.green)
-                                    .padding(4)
-                                    .background(Color.green.opacity(0.1))
-                                    .clipShape(Capsule())
-                            }
-                        }
-                        Spacer()
+                    VStack(alignment: .leading) {
+                        Text(vm.artist?.name ?? "Loading...")
+                            .font(.title.bold())
+                        Text("\(vm.albums.count) Albums")
+                            .foregroundStyle(.secondary)
                     }
-                    .padding()
-                    
-                    Divider().padding(.horizontal)
-                    
-                    // MARK: - Albums List
-                    if vm.isLoading && vm.albums.isEmpty {
-                        ProgressView().padding(.top, 40)
-                    } else if vm.albums.isEmpty {
-                         ContentUnavailableView(
-                            "No Albums",
-                            systemImage: "music.note",
-                            description: Text(showDownloadedOnly ? "No downloaded albums found" : "No albums found")
-                        )
-                        .padding(.top, 40)
-                    } else {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 20)], spacing: 24) {
-                            ForEach(vm.albums, id: \.id) { album in
-                                NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
-                                    VStack(alignment: .leading, spacing: 8) {
-                                        CoverImageView(coverId: album.coverArtId, size: 150)
-                                            .cornerRadius(12)
-                                            .shadow(radius: 4)
-                                        
-                                        VStack(alignment: .leading, spacing: 2) {
-                                            Text(album.title)
-                                                .font(.headline)
-                                                .lineLimit(1)
-                                                .foregroundStyle(.primary)
-                                            
-                                            if let year = album.year {
-                                                Text(String(year))
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-                                            }
-                                        }
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                            }
+                    Spacer()
+                }
+                .padding()
+                
+                // Albums Grid
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 20)], spacing: 24) {
+                    ForEach(vm.albums) { album in
+                        NavigationLink(value: Router.Destination.albumDetail(albumId: album.id)) {
+                            AlbumCell(album: album, cache: container.coverCache)
                         }
-                        .padding()
+                        .buttonStyle(.plain)
                     }
                 }
-            } else {
-                ProgressView().padding(.top, 50)
+                .padding()
             }
         }
+        .task { await vm.load() }
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            if viewModel == nil {
-                viewModel = ArtistDetailViewModel(
-                    artistId: artistId,
-                    showDownloadedOnly: showDownloadedOnly,
-                    music: music
-                )
-            }
-        }
-        .task {
-            await viewModel?.load()
-        }
     }
 }

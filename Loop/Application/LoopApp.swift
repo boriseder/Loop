@@ -1,95 +1,87 @@
-//
-//  LoopApp.swift
-//  Loop
-//
-//  FIXED: Integrated skeleton into LibraryView for seamless transitions
-//
-
 import SwiftUI
 
 @main
 struct LoopApp: App {
     @State private var container = AppContainer()
-    @State private var isPlayerPresented = false
-    @State private var isAuthChecked = false // ✅ Track if auth check is complete
     
     var body: some Scene {
         WindowGroup {
-            Group {
-                if !isAuthChecked {
-                    // ✅ Show nothing while checking auth (very brief)
-                    Color.clear
-                } else if container.auth.isAuthenticated {
-                    AuthenticatedRoot()
-                } else {
-                    LoginView()
-                }
-            }
-            .environment(container.auth)
-            .environment(container.music)
-            .environment(container.playback)
-            .environment(container.downloads)
-            .environment(container.router)
-            .overlay {
-                if container.music.isSyncing {
-                    SyncProgressView(
-                        progress: container.music.syncProgress,
-                        onCancel: {
-                            Task {
-                                await container.music.cancelSync()
-                            }
-                        }
-                    )
-                    .transition(.opacity.combined(with: .scale(scale: 0.9)))
-                }
-            }
-            .animation(.easeInOut, value: container.music.isSyncing)
-            .task {
-                await container.auth.restoreSession()
-                // Mark auth check as complete
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isAuthChecked = true
-                }
+            if container.authService.isAuthenticated {
+                AuthenticatedRoot(container: container)
+            } else {
+                LoginView(auth: container.authService)
             }
         }
     }
+}
+
+struct AuthenticatedRoot: View {
+    let container: AppContainer
+    @State private var router = Router()
+    @State private var isPlayerPresented = false
     
-    @ViewBuilder
-    private func AuthenticatedRoot() -> some View {
-        @Bindable var router = container.router
-        
+    var body: some View {
         NavigationStack(path: $router.path) {
-            LibraryView()
-                .navigationDestination(for: Router.Destination.self) { destination in
-                    destinationView(for: destination)
+            LibraryView(
+                viewModel: LibraryViewModel(repo: container.repo, syncManager: container.syncManager),
+                container: container
+            )
+            .navigationDestination(for: Router.Destination.self) { dest in
+                switch dest {
+                case .albumDetail(let id):
+                    AlbumDetailView(
+                        vm: AlbumDetailViewModel(
+                            albumId: id,
+                            repo: container.repo,
+                            sync: container.syncManager,
+                            downloader: container.downloadManager,
+                            audio: container.audioEngine
+                        ),
+                        cache: container.coverCache // ✅ Passed cache
+                    )
+                    
+                case .artistDetail(let id, let showDownloaded):
+                    ArtistDetailView(
+                        vm: ArtistDetailViewModel(
+                            artistId: id,
+                            showDownloadedOnly: showDownloaded,
+                            repo: container.repo,
+                            downloader: container.downloadManager
+                        ),
+                        container: container
+                    )
+                    
+                case .genreDetail(let name, _): // Assuming filtered view handles showDownloaded internally or we pass it
+                    GenreDetailView(
+                        vm: GenreDetailViewModel(genreName: name, repo: container.repo),
+                        container: container
+                    )
+                    
+                case .downloads:
+                    DownloadsView(
+                        repo: container.repo,
+                        downloader: container.downloadManager,
+                        cache: container.coverCache
+                    )
                 }
+            }
         }
+        .environment(router)
         .overlay(alignment: .bottom) {
-            if container.playback.currentSongId != nil && container.playback.currentTitle != "Not Playing" {
-                MiniPlayerView()
-                    .padding(.bottom, 8)
-                    .padding(.horizontal, 12)
-                    .onTapGesture { isPlayerPresented = true }
-                    .transition(.move(edge: .bottom))
+            if container.audioEngine.currentSong != nil {
+                MiniPlayerView(audio: container.audioEngine)
+                    .onTapGesture {
+                        isPlayerPresented = true
+                    }
             }
         }
         .sheet(isPresented: $isPlayerPresented) {
-            PlayerView(isPresented: $isPlayerPresented)
-                .presentationDragIndicator(.visible)
-        }
-    }
-    
-    @ViewBuilder
-    private func destinationView(for destination: Router.Destination) -> some View {
-        switch destination {
-        case .albumDetail(let id):
-            AlbumDetailView(albumId: id)
-        case .artistDetail(let id, let showDownloaded):
-            ArtistDetailView(artistId: id, showDownloadedOnly: showDownloaded)
-        case .genreDetail(let name, let showDownloaded):
-            GenreDetailView(genreName: name, showDownloadedOnly: showDownloaded)
-        case .downloads:
-            DownloadsView()
+            PlayerView(
+                audio: container.audioEngine, // ✅ Passed audio
+                cache: container.coverCache,  // ✅ Passed cache
+                isPresented: $isPlayerPresented
+            )
+            .presentationDragIndicator(.visible)
         }
     }
 }

@@ -1,46 +1,49 @@
-//
-//  ArtistDetailViewModel.swift
-//  Loop
-//
-//  FIXED: Respects "Downloaded Only" filter
-//
-
 import Foundation
 import Observation
 
 @Observable @MainActor
 final class ArtistDetailViewModel {
-    
     var artist: ArtistDTO?
     var albums: [AlbumDTO] = []
-    var isLoading = false
     
     private let artistId: String
     private let showDownloadedOnly: Bool
-    private let music: MusicEnvironment
+    private let repo: MusicRepository
+    private let downloader: DownloadManager
     
-    init(artistId: String, showDownloadedOnly: Bool, music: MusicEnvironment) {
+    init(artistId: String, showDownloadedOnly: Bool, repo: MusicRepository, downloader: DownloadManager) {
         self.artistId = artistId
         self.showDownloadedOnly = showDownloadedOnly
-        self.music = music
+        self.repo = repo
+        self.downloader = downloader
     }
     
     func load() async {
-        isLoading = true
         do {
-            self.artist = try await music.getArtist(id: artistId)
-            let allAlbums = try await music.getAlbums(forArtist: artistId)
+            self.artist = try repo.getArtist(id: artistId)
+            let allAlbums = try repo.getAlbums(forArtist: artistId)
             
-            // ✅ FILTER: Only show downloaded albums if flag is set
             if showDownloadedOnly {
-                self.albums = allAlbums.filter { music.downloadedAlbumIds.contains($0.id) }
+                // Filter albums that have at least one song downloaded
+                // This is an expensive check, so we do it carefully
+                var filtered: [AlbumDTO] = []
+                for album in allAlbums {
+                    if await isAlbumDownloaded(album.id) {
+                        filtered.append(album)
+                    }
+                }
+                self.albums = filtered
             } else {
                 self.albums = allAlbums
             }
-            
         } catch {
             print("Error loading artist: \(error)")
         }
-        isLoading = false
+    }
+    
+    private func isAlbumDownloaded(_ albumId: String) async -> Bool {
+        // Check if any song in the album exists on disk
+        guard let songs = try? repo.getSongs(for: albumId) else { return false }
+        return songs.contains { downloader.isDownloaded(songId: $0.id) }
     }
 }

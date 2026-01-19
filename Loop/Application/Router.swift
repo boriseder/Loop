@@ -1,22 +1,14 @@
-//
-//  Router.swift
-//  Loop
-//
-//  FIXED: Added showDownloadedOnly to Artist destination
-//
-
 import SwiftUI
 import Observation
 
 @Observable
 final class Router {
-    
     var path = NavigationPath()
     
-    enum Destination: Hashable, Codable {
+    enum Destination: Hashable, Sendable {
         case albumDetail(albumId: String)
-        case artistDetail(artistId: String, showDownloadedOnly: Bool)
-        case genreDetail(genreName: String, showDownloadedOnly: Bool)
+        case artistDetail(artistId: String, showDownloaded: Bool = false)
+        case genreDetail(name: String, showDownloaded: Bool = false)
         case downloads
     }
     
@@ -24,20 +16,15 @@ final class Router {
         path.append(Destination.albumDetail(albumId: id))
     }
     
-    // ✅ UPDATE: Default to false
-    func navigateToArtist(_ id: String, showDownloadedOnly: Bool = false) {
-        path.append(Destination.artistDetail(artistId: id, showDownloadedOnly: showDownloadedOnly))
+    func navigateToArtist(_ id: String) {
+        path.append(Destination.artistDetail(artistId: id))
     }
     
-    func navigateToGenre(_ name: String, showDownloadedOnly: Bool = false) {
-        path.append(Destination.genreDetail(genreName: name, showDownloadedOnly: showDownloadedOnly))
+    func navigateToGenre(_ name: String) {
+        path.append(Destination.genreDetail(name: name))
     }
     
     func navigateToDownloads() {
         path.append(Destination.downloads)
-    }
-    
-    func popToRoot() {
-        path.removeLast(path.count)
     }
 }

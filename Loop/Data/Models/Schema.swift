@@ -1,10 +1,3 @@
-//
-//  Schema.swift
-//  Loop
-//
-//  Created by Architecture Blueprint v6.3
-//
-
 import Foundation
 import SwiftData
 
@@ -17,7 +10,6 @@ final class Song {
     var duration: TimeInterval
     var path: String
     
-    // Relationships
     var artistId: String
     var albumId: String
     
@@ -46,7 +38,7 @@ final class Album {
     var artistId: String
     var coverArtId: String?
     var year: Int?
-    var genre: String? // ✅ Added: Store genre name for filtering
+    var genre: String?
     
     @Relationship(deleteRule: .cascade)
     var songs: [Song] = []
@@ -82,10 +74,10 @@ final class Artist {
     }
 }
 
-// MARK: - Genre (✅ New Entity)
+// MARK: - Genre
 @Model
 final class Genre {
-    @Attribute(.unique) var name: String // Genre names are unique IDs in Subsonic usually
+    @Attribute(.unique) var name: String
     var albumCount: Int
     var songCount: Int
     

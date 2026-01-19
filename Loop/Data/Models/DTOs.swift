@@ -1,14 +1,5 @@
-//
-//  DTOs.swift
-//  Loop
-//
-//  Fixed: SongDTO now includes 'albumTitle' for Control Center display
-//
-
 import Foundation
-import SwiftData
 
-// MARK: - Album DTO
 struct AlbumDTO: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
@@ -29,7 +20,6 @@ struct AlbumDTO: Identifiable, Hashable, Sendable {
     }
 }
 
-// MARK: - Artist DTO
 struct ArtistDTO: Identifiable, Hashable, Sendable {
     let id: String
     let name: String
@@ -42,7 +32,6 @@ struct ArtistDTO: Identifiable, Hashable, Sendable {
     }
 }
 
-// MARK: - Song DTO
 struct SongDTO: Identifiable, Hashable, Sendable {
     let id: String
     let title: String
@@ -51,10 +40,8 @@ struct SongDTO: Identifiable, Hashable, Sendable {
     let path: String
     let albumId: String
     let artistId: String
-    
-    // ✅ Flattened Properties (Optimized for UI & Player)
     let artistName: String?
-    let albumTitle: String? // Added for Lock Screen
+    let albumTitle: String?
     let coverArtId: String?
     
     init(from entity: Song) {
@@ -65,15 +52,12 @@ struct SongDTO: Identifiable, Hashable, Sendable {
         self.path = entity.path
         self.albumId = entity.albumId
         self.artistId = entity.artistId
-        
-        // Flatten relationships immediately
         self.artistName = entity.artist?.name
         self.albumTitle = entity.album?.title
         self.coverArtId = entity.album?.coverArtId
     }
 }
 
-// MARK: - Genre DTO
 struct GenreDTO: Identifiable, Hashable, Sendable {
     var id: String { name }
     let name: String
@@ -84,19 +68,5 @@ struct GenreDTO: Identifiable, Hashable, Sendable {
         self.name = entity.name
         self.songCount = entity.songCount
         self.albumCount = entity.albumCount
-    }
-}
-
-// MARK: - Search Results
-struct SearchResults: Sendable {
-    var songs: [SongDTO] = []
-    var albums: [AlbumDTO] = []
-    var artists: [ArtistDTO] = []
-    
-    // ✅ FIX: Explicit nonisolated init to allow creation in background threads
-    nonisolated init(songs: [SongDTO] = [], albums: [AlbumDTO] = [], artists: [ArtistDTO] = []) {
-        self.songs = songs
-        self.albums = albums
-        self.artists = artists
     }
 }
