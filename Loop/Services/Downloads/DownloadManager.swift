@@ -54,9 +54,10 @@ final class DownloadManager {
         guard !isDownloaded(songId: id),
               downloadTasks[id] == nil else { return }
         
-        // Create download task
+        // Create download task - FIX: Explicitly handle the optional return
         let task = Task.detached(priority: .utility) { [weak self] in
             await self?.performDownload(song: song)
+            return () // Explicitly return Void
         }
         
         downloadTasks[id] = task

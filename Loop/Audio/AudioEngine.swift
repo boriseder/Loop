@@ -34,8 +34,11 @@ final class AudioEngine {
         startProgressTimer()
     }
     
-    deinit {
-        progressTimer?.invalidate()
+    // FIX: Make deinit nonisolated and use Task to cleanup on MainActor
+    nonisolated deinit {
+        Task { @MainActor in
+            self.progressTimer?.invalidate()
+        }
         UIApplication.shared.endReceivingRemoteControlEvents()
     }
     
