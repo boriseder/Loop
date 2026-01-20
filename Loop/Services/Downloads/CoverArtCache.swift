@@ -7,13 +7,18 @@ actor CoverArtCache {
     private let fileManager = FileManager.default
     private var memoryCache: [String: UIImage] = [:]
     
+    // Computed property must be isolated to actor
     private var cacheDir: URL {
-        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Covers")
+        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Covers")
     }
     
     init(client: NavidromeClient) {
         self.client = client
-        try? fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        // Create directory in init (already isolated)
+        let dir = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Covers")
+        try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
     }
     
     func image(for id: String, size: Int) async -> UIImage? {
@@ -46,6 +51,9 @@ actor CoverArtCache {
     func clearCache() {
         memoryCache.removeAll()
         try? fileManager.removeItem(at: cacheDir)
-        try? fileManager.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        // Recreate directory
+        let dir = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Covers")
+        try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
     }
 }

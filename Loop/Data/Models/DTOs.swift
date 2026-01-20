@@ -9,7 +9,7 @@ struct AlbumDTO: Identifiable, Hashable, Sendable {
     let year: Int?
     let genre: String?
     
-    init(from entity: Album) {
+    nonisolated init(from entity: Album) {
         self.id = entity.id
         self.title = entity.title
         self.artistId = entity.artistId
@@ -25,7 +25,7 @@ struct ArtistDTO: Identifiable, Hashable, Sendable {
     let name: String
     let albumCount: Int
     
-    init(from entity: Artist) {
+    nonisolated init(from entity: Artist) {
         self.id = entity.id
         self.name = entity.name
         self.albumCount = entity.albums.count
@@ -44,7 +44,7 @@ struct SongDTO: Identifiable, Hashable, Sendable {
     let albumTitle: String?
     let coverArtId: String?
     
-    init(from entity: Song) {
+    nonisolated init(from entity: Song) {
         self.id = entity.id
         self.title = entity.title
         self.trackNumber = entity.trackNumber
@@ -64,7 +64,7 @@ struct GenreDTO: Identifiable, Hashable, Sendable {
     let songCount: Int
     let albumCount: Int
     
-    init(from entity: Genre) {
+    nonisolated init(from entity: Genre) {
         self.name = entity.name
         self.songCount = entity.songCount
         self.albumCount = entity.albumCount

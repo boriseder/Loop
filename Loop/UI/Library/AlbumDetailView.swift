@@ -39,32 +39,30 @@ struct AlbumDetailView: View {
                             }
                             .disabled(vm.songs.isEmpty)
                             
-                            // Download Button
-                            Button {
-                                if vm.isDownloading {
-                                    vm.cancelDownload()
-                                } else if vm.isDownloaded() {
-                                    // Already downloaded - could show options
-                                } else {
-                                    vm.downloadAlbum()
-                                }
-                            } label: {
-                                ZStack {
-                                    Circle()
-                                        .fill(.ultraThinMaterial)
-                                        .frame(width: 50, height: 50)
-                                    
+                            // Download Button with State
+                            DownloadButton(
+                                isDownloading: vm.isDownloading,
+                                isDownloaded: vm.isDownloaded(),
+                                progress: vm.downloadProgress,
+                                isEmpty: vm.songs.isEmpty,
+                                onTap: {
+                                    print("🔘 Download button tapped - isDownloading: \(vm.isDownloading), isDownloaded: \(vm.isDownloaded())")
                                     if vm.isDownloading {
-                                        // Show progress
-                                        CircularProgressView(progress: vm.downloadProgress)
-                                            .frame(width: 30, height: 30)
+                                        vm.cancelDownload()
                                     } else if vm.isDownloaded() {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(.green)
+                                        vm.showDeleteConfirmation = true
                                     } else {
-                                        Image(systemName: "arrow.down.circle")
+                                        vm.downloadAlbum()
                                     }
                                 }
+                            )
+                            .alert("Delete Downloads", isPresented: $vm.showDeleteConfirmation) {
+                                Button("Cancel", role: .cancel) { }
+                                Button("Delete", role: .destructive) {
+                                    vm.deleteAlbum()
+                                }
+                            } message: {
+                                Text("Are you sure you want to delete all downloaded songs from this album?")
                             }
                         }
                     }
@@ -77,7 +75,12 @@ struct AlbumDetailView: View {
                         Button {
                             Task { await vm.play(song: song) }
                         } label: {
-                            SongRow(song: song, isDownloaded: vm.downloader.isDownloaded(songId: song.id))
+                            SongRow(
+                                song: song,
+                                isDownloaded: vm.isSongDownloaded(song.id),
+                                isPlaying: vm.audio.currentSong?.id == song.id,
+                                isCurrentlyPlaying: vm.audio.isPlaying && vm.audio.currentSong?.id == song.id
+                            )
                         }
                         .buttonStyle(.plain)
                         Divider().padding(.leading, 16)
@@ -105,36 +108,107 @@ struct AlbumHeaderImage: View {
     }
 }
 
+struct DownloadButton: View {
+    let isDownloading: Bool
+    let isDownloaded: Bool
+    let progress: Double
+    let isEmpty: Bool
+    let onTap: () -> Void
+    
+    var body: some View {
+        Button(action: onTap) {
+            ZStack {
+                Circle()
+                    .fill(.ultraThinMaterial)
+                    .frame(width: 50, height: 50)
+                
+                if isDownloading {
+                    // Show progress with percentage
+                    ZStack {
+                        CircularProgressView(progress: progress)
+                            .frame(width: 34, height: 34)
+                        
+                        Text("\(Int(progress * 100))")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.primary)
+                            .monospacedDigit()
+                    }
+                } else if isDownloaded {
+                    // Downloaded - tap to delete
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.green)
+                } else {
+                    // Not downloaded - tap to download
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.primary)
+                }
+            }
+        }
+        .disabled(isEmpty)
+        .animation(.easeInOut(duration: 0.2), value: isDownloading)
+        .animation(.easeInOut(duration: 0.2), value: isDownloaded)
+    }
+}
+
 struct SongRow: View {
     let song: SongDTO
     let isDownloaded: Bool
+    let isPlaying: Bool
+    let isCurrentlyPlaying: Bool
     
     var body: some View {
         HStack(spacing: 16) {
-            Text("\(song.trackNumber)")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .frame(width: 25, alignment: .trailing)
+            // Track number badge or now playing indicator
+            ZStack {
+                if isCurrentlyPlaying {
+                    // Animated now playing indicator
+                    NowPlayingIndicator(isPlaying: isCurrentlyPlaying)
+                } else {
+                    Circle()
+                        .fill(isPlaying ? Color.accentColor.opacity(0.15) : Color.secondary.opacity(0.15))
+                        .frame(width: 32, height: 32)
+                    
+                    Text("\(song.trackNumber)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(isPlaying ? Color.accentColor : .primary)
+                        .monospacedDigit()
+                }
+            }
+            .frame(width: 32, height: 32)
             
-            VStack(alignment: .leading) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(song.title)
                     .font(.body)
+                    .foregroundStyle(isPlaying ? Color.accentColor : .primary)
                     .lineLimit(1)
+                
+                if let artist = song.artistName {
+                    Text(artist)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             
             Spacer()
             
-            if isDownloaded {
-                Image(systemName: "arrow.down.circle.fill")
+            HStack(spacing: 8) {
+                if isDownloaded {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.green)
+                }
+                
+                Text(formatDuration(song.duration))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
-            
-            Text(formatDuration(song.duration))
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .padding()
+        .padding(.vertical, 8)
+        .padding(.horizontal)
         .contentShape(Rectangle())
     }
     
@@ -178,13 +252,13 @@ struct CircularProgressView: View {
     var body: some View {
         ZStack {
             Circle()
-                .stroke(Color.secondary.opacity(0.3), lineWidth: 3)
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 3)
             
             Circle()
                 .trim(from: 0, to: progress)
                 .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .animation(.linear(duration: 0.3), value: progress)
+                .animation(.linear(duration: 0.2), value: progress)
         }
     }
 }

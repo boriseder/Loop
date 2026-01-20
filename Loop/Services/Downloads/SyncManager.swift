@@ -155,14 +155,13 @@ final class SyncManager {
     func cancelSync() {
         syncTask?.cancel()
         syncTask = nil
-        Task { @MainActor in
-            self.progress = SyncProgress(phase: .idle)
-        }
+        updateProgress(.idle)
     }
     
     // MARK: - Background Sync Logic
     private func performSync() async {
-        await updateProgress(.albums(current: 0, total: 0))
+        // updateProgress is @MainActor, so call it properly
+        updateProgress(.albums(current: 0, total: 0))
         
         do {
             let worker = BackgroundSyncActor(modelContainer: container)
@@ -182,7 +181,7 @@ final class SyncManager {
                     totalAlbums += albums.count
                     offset += pageSize
                     
-                    await updateProgress(.albums(current: totalAlbums, total: totalAlbums + 100))
+                    updateProgress(.albums(current: totalAlbums, total: totalAlbums + 100))
                     
                     if albums.count < pageSize { hasMore = false }
                 } else {
@@ -191,48 +190,55 @@ final class SyncManager {
             }
             
             guard !Task.isCancelled else {
-                await updateProgress(.idle)
+                updateProgress(.idle)
                 return
             }
             
             // 2. Fetch Genres
-            await updateProgress(.genres)
+            updateProgress(.genres)
             let genreResponse: SubsonicGenresResponse = try await client.fetch("getGenres")
             if let genres = genreResponse.subsonicResponse.genres?.genre {
                 try await worker.saveGenres(genres)
             }
             
             guard !Task.isCancelled else {
-                await updateProgress(.idle)
+                updateProgress(.idle)
                 return
             }
             
             // 3. Complete
-            await updateProgress(.complete)
+            updateProgress(.complete)
             logger.info("Sync completed: \(totalAlbums) albums")
             
             // Auto-clear after 2 seconds
             try? await Task.sleep(for: .seconds(2))
-            await updateProgress(.idle)
+            updateProgress(.idle)
             
         } catch {
             guard !Task.isCancelled else {
-                await updateProgress(.idle)
+                updateProgress(.idle)
                 return
             }
             
             logger.error("Sync failed: \(error.localizedDescription)")
-            await updateProgress(.failed(error: error.localizedDescription))
+            updateProgress(.failed(error: error.localizedDescription))
             
             // Auto-clear error after 5 seconds
             try? await Task.sleep(for: .seconds(5))
-            await updateProgress(.idle)
+            updateProgress(.idle)
         }
     }
     
     @MainActor
     private func updateProgress(_ phase: SyncProgress.Phase) {
         self.progress = SyncProgress(phase: phase)
+    }
+    
+    // Helper to call updateProgress from background context
+    private func setProgress(_ phase: SyncProgress.Phase) async {
+        await MainActor.run {
+            self.progress = SyncProgress(phase: phase)
+        }
     }
     
     // MARK: - Album Detail Sync

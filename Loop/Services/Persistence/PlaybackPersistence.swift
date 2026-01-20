@@ -1,20 +1,42 @@
 import Foundation
 
-struct PlaybackState: Codable, Sendable {
+// Simple struct - no Codable isolation issues
+struct PlaybackState: Sendable {
     let currentSongId: String
     let queue: [String]
     let progress: Double
 }
 
 actor PlaybackPersistence {
+    private let userDefaults = UserDefaults.standard
+    private let key = "playbackState"
+    
     func save(_ state: PlaybackState) {
-        if let data = try? JSONEncoder().encode(state) {
-            UserDefaults.standard.set(data, forKey: "playbackState")
-        }
+        // Manual encoding to avoid Codable isolation issues
+        let dict: [String: Any] = [
+            "currentSongId": state.currentSongId,
+            "queue": state.queue,
+            "progress": state.progress
+        ]
+        userDefaults.set(dict, forKey: key)
     }
     
     func load() -> PlaybackState? {
-        guard let data = UserDefaults.standard.data(forKey: "playbackState") else { return nil }
-        return try? JSONDecoder().decode(PlaybackState.self, from: data)
+        guard let dict = userDefaults.dictionary(forKey: key),
+              let currentSongId = dict["currentSongId"] as? String,
+              let queue = dict["queue"] as? [String],
+              let progress = dict["progress"] as? Double else {
+            return nil
+        }
+        
+        return PlaybackState(
+            currentSongId: currentSongId,
+            queue: queue,
+            progress: progress
+        )
+    }
+    
+    func clear() {
+        userDefaults.removeObject(forKey: key)
     }
 }

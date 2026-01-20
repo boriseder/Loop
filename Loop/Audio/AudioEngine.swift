@@ -3,7 +3,7 @@ import AVFoundation
 import MediaPlayer
 import Observation
 
-// MARK: - Audio Engine (MainActor only for @Observable state)
+// MARK: - Audio Engine
 @Observable @MainActor
 final class AudioEngine {
     // MARK: - Published State (UI reads these)
@@ -14,7 +14,7 @@ final class AudioEngine {
     
     // MARK: - Private Dependencies
     private let player = AVQueuePlayer()
-    private let provider: AssetProvider
+    private let provider: any AssetProvider  // Changed from weak - we need strong reference
     private let repo: MusicRepository
     private let coverCache: CoverArtCache
     
@@ -23,6 +23,9 @@ final class AudioEngine {
     
     // MARK: - Timer Management
     private var progressTimer: Timer?
+    
+    // MARK: - Remote Commands
+    private var commandTargets: [Any] = []
     
     // MARK: - Init
     init(provider: AssetProvider, repo: MusicRepository, coverCache: CoverArtCache) {
@@ -34,12 +37,16 @@ final class AudioEngine {
         startProgressTimer()
     }
     
-    // FIX: Make deinit nonisolated and use Task to cleanup on MainActor
+    // In Swift 6, @MainActor class deinit is implicitly nonisolated
+    // We need to use MainActor.assumeIsolated for synchronous cleanup
     nonisolated deinit {
-        Task { @MainActor in
+        // Use assumeIsolated to access MainActor properties synchronously
+        // This is safe because deinit only runs when the last reference is gone
+        MainActor.assumeIsolated {
             self.progressTimer?.invalidate()
+            self.removeRemoteCommandTargets()
+            UIApplication.shared.endReceivingRemoteControlEvents()
         }
-        UIApplication.shared.endReceivingRemoteControlEvents()
     }
     
     // MARK: - Setup
@@ -62,10 +69,7 @@ final class AudioEngine {
     
     // MARK: - Public Control Methods
     func play(songId: String, contextQueue: [String]) async {
-        // Update actor state first (thread-safe)
         await stateActor.setQueue(contextQueue, currentId: songId)
-        
-        // Load and play
         await loadAndPlayCurrent(songId: songId)
     }
     
@@ -85,37 +89,52 @@ final class AudioEngine {
     }
     
     func skipToPrevious() async {
-        // If more than 3 seconds in, restart current song
         if player.currentTime().seconds > 3 {
-            await player.seek(to: .zero)
+            await seek(to: 0)
             return
         }
         
-        // Otherwise go to previous
         guard let prevId = await stateActor.previousSong() else { return }
         await loadAndPlayCurrent(songId: prevId)
     }
     
+    func seek(to seconds: Double) async {
+        await player.seek(to: CMTime(seconds: seconds, preferredTimescale: 1))
+        progress = seconds
+    }
+    
     // MARK: - Internal Loading Logic
     private func loadAndPlayCurrent(songId: String) async {
-        // 1. Load metadata (repo call is now off MainActor)
+        print("🎵 AudioEngine: Starting to load song \(songId)")
+        
+        // 1. Load metadata
         let song = await Task.detached { [repo] in
             try? await repo.getSong(id: songId)
         }.value
         
-        guard let song else { return }
+        guard let song else {
+            print("❌ AudioEngine: Failed to load song metadata for \(songId)")
+            return
+        }
+        
+        print("✅ AudioEngine: Loaded song metadata: \(song.title)")
         
         // 2. Update UI state
         self.currentSong = song
         
-        // 3. Update Now Playing (can be async)
+        // 3. Update Now Playing
         Task {
             await updateNowPlayingInfo(song: song)
         }
         
-        // 4. Load audio asset (off MainActor)
+        // 4. Load audio asset
         let asset = await provider.asset(for: songId)
-        guard let asset else { return }
+        guard let asset else {
+            print("❌ AudioEngine: Failed to get asset for song \(songId)")
+            return
+        }
+        
+        print("✅ AudioEngine: Got asset for song \(songId)")
         
         // 5. Replace player item
         player.pause()
@@ -126,9 +145,12 @@ final class AudioEngine {
         player.play()
         isPlaying = true
         
+        print("✅ AudioEngine: Started playback")
+        
         // 6. Load duration
         if let durationValue = try? await asset.load(.duration) {
             self.duration = durationValue.seconds
+            print("✅ AudioEngine: Duration loaded: \(durationValue.seconds)s")
         }
     }
     
@@ -136,29 +158,50 @@ final class AudioEngine {
     private func setupRemoteCommands() {
         let center = MPRemoteCommandCenter.shared()
         
-        center.playCommand.addTarget { [weak self] _ in
+        let playTarget = center.playCommand.addTarget { [weak self] _ in
             guard let self else { return .commandFailed }
-            self.togglePlayPause()
+            Task { @MainActor in
+                self.togglePlayPause()
+            }
             return .success
         }
+        commandTargets.append(playTarget)
         
-        center.pauseCommand.addTarget { [weak self] _ in
+        let pauseTarget = center.pauseCommand.addTarget { [weak self] _ in
             guard let self else { return .commandFailed }
-            self.togglePlayPause()
+            Task { @MainActor in
+                self.togglePlayPause()
+            }
             return .success
         }
+        commandTargets.append(pauseTarget)
         
-        center.nextTrackCommand.addTarget { [weak self] _ in
+        let nextTarget = center.nextTrackCommand.addTarget { [weak self] _ in
             guard let self else { return .commandFailed }
-            Task { await self.skipToNext() }
+            Task { @MainActor in
+                await self.skipToNext()
+            }
             return .success
         }
+        commandTargets.append(nextTarget)
         
-        center.previousTrackCommand.addTarget { [weak self] _ in
+        let prevTarget = center.previousTrackCommand.addTarget { [weak self] _ in
             guard let self else { return .commandFailed }
-            Task { await self.skipToPrevious() }
+            Task { @MainActor in
+                await self.skipToPrevious()
+            }
             return .success
         }
+        commandTargets.append(prevTarget)
+    }
+    
+    private func removeRemoteCommandTargets() {
+        let center = MPRemoteCommandCenter.shared()
+        center.playCommand.removeTarget(nil)
+        center.pauseCommand.removeTarget(nil)
+        center.nextTrackCommand.removeTarget(nil)
+        center.previousTrackCommand.removeTarget(nil)
+        commandTargets.removeAll()
     }
     
     // MARK: - Now Playing Info

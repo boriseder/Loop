@@ -50,11 +50,25 @@ final class DownloadManager {
     func downloadSong(song: SongDTO) {
         let id = song.id
         
-        // Check if already downloaded or downloading
-        guard !isDownloaded(songId: id),
-              downloadTasks[id] == nil else { return }
+        print("⬇️ DownloadManager: Download requested for \(song.title) (ID: \(id))")
         
-        // Create download task - FIX: Explicitly handle the optional return
+        // Check if already downloaded or downloading
+        guard !isDownloaded(songId: id) else {
+            print("✅ DownloadManager: Song already downloaded")
+            return
+        }
+        
+        guard downloadTasks[id] == nil else {
+            print("⚠️ DownloadManager: Download already in progress")
+            return
+        }
+        
+        print("🚀 DownloadManager: Starting download task")
+        
+        // IMPORTANT: Add to activeDownloads IMMEDIATELY so ViewModel can detect it
+        activeDownloads[id] = DownloadProgress(songId: id, bytesDownloaded: 0, totalBytes: 0)
+        
+        // Create download task
         let task = Task.detached(priority: .utility) { [weak self] in
             await self?.performDownload(song: song)
             return () // Explicitly return Void
@@ -94,10 +108,9 @@ final class DownloadManager {
     private func performDownload(song: SongDTO) async {
         let id = song.id
         
-        // Update state: download started
-        await MainActor.run {
-            activeDownloads[id] = DownloadProgress(songId: id, bytesDownloaded: 0, totalBytes: 0)
-        }
+        print("⬇️ DownloadManager: performDownload starting for \(song.title)")
+        
+        // Note: activeDownloads entry is already created in downloadSong()
         
         defer {
             Task { @MainActor in
@@ -108,19 +121,25 @@ final class DownloadManager {
         
         do {
             guard let url = await client.streamURL(for: id) else {
+                print("❌ DownloadManager: Failed to get stream URL")
                 throw DownloadError.invalidURL
             }
             
+            print("✅ DownloadManager: Got stream URL: \(url.absoluteString)")
+            
             // Check available disk space
             guard hasEnoughDiskSpace() else {
+                print("❌ DownloadManager: Insufficient storage")
                 throw DownloadError.insufficientStorage
             }
             
             // Download with progress tracking
+            print("⬇️ DownloadManager: Starting URLSession download")
             let (localURL, response) = try await URLSession.shared.download(from: url)
             
             guard let httpResponse = response as? HTTPURLResponse,
                   httpResponse.statusCode == 200 else {
+                print("❌ DownloadManager: HTTP error - status: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
                 throw DownloadError.networkError
             }
             
@@ -131,9 +150,11 @@ final class DownloadManager {
             }
             try fileManager.moveItem(at: localURL, to: destination)
             
+            print("✅ DownloadManager: Downloaded successfully to \(destination.path)")
             logger.info("Downloaded: \(song.title)")
             
         } catch {
+            print("❌ DownloadManager: Download failed - \(error.localizedDescription)")
             logger.error("Download failed [\(id)]: \(error.localizedDescription)")
         }
     }

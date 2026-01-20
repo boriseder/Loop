@@ -2,54 +2,86 @@ import SwiftUI
 
 struct MiniPlayerView: View {
     let audio: AudioEngine
-    @State private var isExpanded = false
+    let cache: CoverArtCache
+    
+    @State private var coverImage: UIImage?
     
     var body: some View {
-        VStack {
-            HStack(spacing: 12) {
-                // We'd ideally fetch cover here too, but for mini player let's keep it simple
-                Image(systemName: "music.note")
-                    .frame(width: 44, height: 44)
-                    .background(Color.secondary.opacity(0.1))
-                    .cornerRadius(6)
-                
-                VStack(alignment: .leading) {
-                    Text(audio.currentSong?.title ?? "Not Playing")
-                        .font(.subheadline.bold())
-                        .lineLimit(1)
-                    Text(audio.currentSong?.artistName ?? "")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        HStack(spacing: 12) {
+            // Cover Art
+            Group {
+                if let coverImage {
+                    Image(uiImage: coverImage)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    Color.secondary.opacity(0.2)
+                        .overlay(
+                            Image(systemName: "music.note")
+                                .foregroundStyle(.secondary)
+                        )
                 }
+            }
+            .frame(width: 48, height: 48)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            
+            // Song Info
+            VStack(alignment: .leading, spacing: 2) {
+                Text(audio.currentSong?.title ?? "Not Playing")
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
                 
-                Spacer()
+                Text(audio.currentSong?.artistName ?? "")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            
+            Spacer()
+            
+            // Playback Controls
+            HStack(spacing: 16) {
+                Button {
+                    Task { await audio.skipToPrevious() }
+                } label: {
+                    Image(systemName: "backward.fill")
+                        .font(.title3)
+                        .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
                 
                 Button {
                     audio.togglePlayPause()
                 } label: {
                     Image(systemName: audio.isPlaying ? "pause.fill" : "play.fill")
                         .font(.title2)
+                        .foregroundStyle(.primary)
                 }
-                .padding(.trailing, 8)
+                .buttonStyle(.plain)
+                
+                Button {
+                    Task { await audio.skipToNext() }
+                } label: {
+                    Image(systemName: "forward.fill")
+                        .font(.title3)
+                        .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
             }
-            .padding(12)
-            .background(Material.regular)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .shadow(radius: 5)
-            .padding(.horizontal)
-            .padding(.bottom, 8)
-            .onTapGesture {
-                isExpanded = true
-            }
+            .padding(.trailing, 4)
         }
-        // NOTE: In a real app, you would pass dependencies for the full player
-        // For this refactor, we are focusing on the architecture separation
-        .sheet(isPresented: $isExpanded) {
-            // We need to access the AppContainer's cache here.
-            // In a strict refactor, we pass it down.
-            // Placeholder:
-            Text("Full Player requires cache injection")
+        .padding(12)
+        .background(Material.bar)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.1), radius: 8, y: -2)
+        .padding(.horizontal)
+        .padding(.bottom, 8)
+        .task(id: audio.currentSong?.coverArtId) {
+            if let coverArtId = audio.currentSong?.coverArtId {
+                coverImage = await cache.image(for: coverArtId, size: 200)
+            } else {
+                coverImage = nil
+            }
         }
     }
 }

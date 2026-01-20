@@ -42,3 +42,4 @@ struct AlbumCell: View {
         }
     }
 }
+

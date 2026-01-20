@@ -28,7 +28,7 @@ actor NavidromeClient {
     
     func coverArtURL(id: String, size: Int) -> URL? {
         guard let credentials = currentSession else { return nil }
-        var params = ["id": id, "size": String(size)]
+        let params = ["id": id, "size": String(size)]
         return try? constructURL(endpoint: "getCoverArt", params: params, credentials: credentials)
     }
     
@@ -59,8 +59,6 @@ actor NavidromeClient {
     }
     
     private func performRequest<T: Decodable>(url: URL) async throws -> T {
-        // Non-isolated decoding logic is not needed if we trust the actor's context for simple tasks
-        // However, for heavy parsing, we can detach. Here we keep it simple as Swift 6 actors are efficient.
         let (data, response) = try await session.data(from: url)
         
         guard let http = response as? HTTPURLResponse else { throw NetworkError.invalidResponse }
