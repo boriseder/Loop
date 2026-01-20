@@ -17,6 +17,9 @@ final class AppContainer {
     // Engine
     let audioEngine: AudioEngine
     
+    // UI State
+    let downloadFilter: DownloadFilter
+    
     init() {
         self.db = MusicDatabase()
         self.client = NavidromeClient()
@@ -30,5 +33,7 @@ final class AppContainer {
         
         let assetProvider = SmartAssetProvider(client: client, downloadManager: downloadManager)
         self.audioEngine = AudioEngine(provider: assetProvider, repo: repo, coverCache: coverCache)
+        
+        self.downloadFilter = DownloadFilter()
     }
 }

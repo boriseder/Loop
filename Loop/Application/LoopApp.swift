@@ -24,7 +24,12 @@ struct AuthenticatedRoot: View {
         ZStack {
             NavigationStack(path: $router.path) {
                 LibraryView(
-                    viewModel: LibraryViewModel(repo: container.repo, syncManager: container.syncManager),
+                    viewModel: LibraryViewModel(
+                        repo: container.repo,
+                        syncManager: container.syncManager,
+                        downloader: container.downloadManager,
+                        filter: container.downloadFilter
+                    ),
                     container: container
                 )
                 .navigationDestination(for: Router.Destination.self) { dest in
@@ -71,20 +76,25 @@ struct AuthenticatedRoot: View {
                 cache: container.coverCache
             )
             
-        case .artistDetail(let id, let showDownloaded):
+        case .artistDetail(let id, _):
             ArtistDetailView(
                 vm: ArtistDetailViewModel(
                     artistId: id,
-                    showDownloadedOnly: showDownloaded,
                     repo: container.repo,
-                    downloader: container.downloadManager
+                    downloader: container.downloadManager,
+                    filter: container.downloadFilter
                 ),
                 container: container
             )
             
         case .genreDetail(let name, _):
             GenreDetailView(
-                vm: GenreDetailViewModel(genreName: name, repo: container.repo),
+                vm: GenreDetailViewModel(
+                    genreName: name,
+                    repo: container.repo,
+                    downloader: container.downloadManager,
+                    filter: container.downloadFilter
+                ),
                 container: container
             )
         }

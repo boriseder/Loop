@@ -5,6 +5,8 @@ struct LibraryView: View {
     let container: AppContainer
     @Environment(Router.self) private var router
     
+    @State private var showSearch = false
+    
     var body: some View {
         VStack(spacing: 0) {
             // Scope Bar
@@ -30,11 +32,19 @@ struct LibraryView: View {
                 )
                 
             case .empty:
-                ContentUnavailableView(
-                    "Empty Library",
-                    systemImage: "music.note",
-                    description: Text("Sync your music to get started")
-                )
+                if container.downloadFilter.showDownloadedOnly {
+                    ContentUnavailableView(
+                        "No Downloads",
+                        systemImage: "arrow.down.circle",
+                        description: Text("You haven't downloaded any music yet")
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "Empty Library",
+                        systemImage: "music.note",
+                        description: Text("Sync your music to get started")
+                    )
+                }
                 
             case .content:
                 ScrollView {
@@ -47,6 +57,37 @@ struct LibraryView: View {
             }
         }
         .navigationTitle("Library")
+        .navigationBarTitleDisplayMode(.automatic)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    // Download filter
+                    Button {
+                        container.downloadFilter.showDownloadedOnly.toggle()
+                        viewModel.filterToggled()
+                    } label: {
+                        Label(
+                            container.downloadFilter.showDownloadedOnly
+                                ? "Show All"
+                                : "Downloaded Only",
+                            systemImage: container.downloadFilter.showDownloadedOnly
+                                ? "arrow.down.circle.fill"
+                                : "arrow.down.circle"
+                        )
+                    }
+
+                    // Search
+                    Button {
+                        showSearch = true
+                    } label: {
+                        Label("Search", systemImage: "magnifyingglass")
+                    }
+
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
         .overlay(alignment: .bottom) {
             // Sync Progress Overlay
             if container.syncManager.progress.isActive {
@@ -62,6 +103,12 @@ struct LibraryView: View {
         .animation(.easeInOut, value: container.syncManager.progress.isActive)
         .task {
             await viewModel.loadData()
+        }
+        .sheet(isPresented: $showSearch) {
+            SearchView(
+                repo: container.repo,
+                router: router
+            )
         }
     }
     

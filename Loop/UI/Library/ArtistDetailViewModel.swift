@@ -7,15 +7,15 @@ final class ArtistDetailViewModel {
     var albums: [AlbumDTO] = []
     
     private let artistId: String
-    private let showDownloadedOnly: Bool
     private let repo: MusicRepository
     private let downloader: DownloadManager
+    private let filter: DownloadFilter
     
-    init(artistId: String, showDownloadedOnly: Bool, repo: MusicRepository, downloader: DownloadManager) {
+    init(artistId: String, repo: MusicRepository, downloader: DownloadManager, filter: DownloadFilter) {
         self.artistId = artistId
-        self.showDownloadedOnly = showDownloadedOnly
         self.repo = repo
         self.downloader = downloader
+        self.filter = filter
     }
     
     func load() async {
@@ -23,9 +23,8 @@ final class ArtistDetailViewModel {
             self.artist = try await repo.getArtist(id: artistId)
             let allAlbums = try await repo.getAlbums(forArtist: artistId)
             
-            if showDownloadedOnly {
+            if filter.showDownloadedOnly {
                 // Filter albums that have at least one song downloaded
-                // This is an expensive check, so we do it carefully
                 var filtered: [AlbumDTO] = []
                 for album in allAlbums {
                     if await isAlbumDownloaded(album.id) {
@@ -33,6 +32,7 @@ final class ArtistDetailViewModel {
                     }
                 }
                 self.albums = filtered
+                print("🔍 Artist albums filtered: \(filtered.count)/\(allAlbums.count)")
             } else {
                 self.albums = allAlbums
             }
@@ -42,7 +42,6 @@ final class ArtistDetailViewModel {
     }
     
     private func isAlbumDownloaded(_ albumId: String) async -> Bool {
-        // Check if any song in the album exists on disk
         guard let songs = try? await repo.getSongs(for: albumId) else { return false }
         return songs.contains { downloader.isDownloaded(songId: $0.id) }
     }
