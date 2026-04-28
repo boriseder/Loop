@@ -3,7 +3,7 @@ import SwiftUI
 @main
 struct LoopApp: App {
     @State private var container = AppContainer()
-    
+
     var body: some Scene {
         WindowGroup {
             if container.authService.isAuthenticated {
@@ -12,14 +12,20 @@ struct LoopApp: App {
                 LoginView(auth: container.authService)
             }
         }
+        // Required: hand the background-session completion handler to DownloadManager
+        // so iOS knows we've processed all queued delegate events.
+        .backgroundTask(.urlSession("at.amtabor.loop.downloads")) {
+            await container.downloadManager.backgroundCompletionHandler?()
+        }
     }
 }
 
+// AuthenticatedRoot and the rest of the file is unchanged from your original.
 struct AuthenticatedRoot: View {
     let container: AppContainer
     @State private var router = Router()
     @State private var isPlayerPresented = false
-    
+
     var body: some View {
         ZStack {
             NavigationStack(path: $router.path) {
@@ -37,15 +43,12 @@ struct AuthenticatedRoot: View {
                 }
                 .environment(router)
             }
-            
-            // Global MiniPlayer overlay
+
             VStack {
                 Spacer()
                 if container.audioEngine.currentSong != nil {
                     MiniPlayerView(audio: container.audioEngine, cache: container.coverCache)
-                        .onTapGesture {
-                            isPlayerPresented = true
-                        }
+                        .onTapGesture { isPlayerPresented = true }
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -60,22 +63,15 @@ struct AuthenticatedRoot: View {
             .presentationDragIndicator(.visible)
         }
     }
-    
+
     @ViewBuilder
     private func destinationView(for destination: Router.Destination) -> some View {
         switch destination {
         case .albumDetail(let id):
             AlbumDetailView(
-                vm: AlbumDetailViewModel(
-                    albumId: id,
-                    repo: container.repo,
-                    sync: container.syncManager,
-                    downloader: container.downloadManager,
-                    audio: container.audioEngine
-                ),
+                vm: container.makeAlbumDetailViewModel(albumId: id),
                 cache: container.coverCache
             )
-            
         case .artistDetail(let id, _):
             ArtistDetailView(
                 vm: ArtistDetailViewModel(
@@ -86,7 +82,6 @@ struct AuthenticatedRoot: View {
                 ),
                 container: container
             )
-            
         case .genreDetail(let name, _):
             GenreDetailView(
                 vm: GenreDetailViewModel(

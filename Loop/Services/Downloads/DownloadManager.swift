@@ -7,178 +7,219 @@ struct DownloadProgress: Sendable {
     let songId: String
     let bytesDownloaded: Int64
     let totalBytes: Int64
-    
+
     var percentage: Double {
         guard totalBytes > 0 else { return 0 }
         return Double(bytesDownloaded) / Double(totalBytes)
     }
 }
 
-// MARK: - Download Manager (MainActor ONLY for @Observable state)
+// MARK: - URLSession factory (outside the @Observable class to avoid macro conflicts)
+private func makeBackgroundSession(delegate: URLSessionDownloadDelegate) -> URLSession {
+    let config = URLSessionConfiguration.background(
+        withIdentifier: "at.amtabor.loop.downloads"
+    )
+    config.isDiscretionary = false          // Download now, not at the system's leisure
+    config.sessionSendsLaunchEvents = true  // Wake the app when downloads finish
+    return URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+}
+
+// MARK: - Download Manager
 @Observable @MainActor
-final class DownloadManager {
-    // MARK: - Published State
+final class DownloadManager: NSObject {
+
+    // MARK: - Observable State
     private(set) var activeDownloads: [String: DownloadProgress] = [:]
-    
+
     // MARK: - Private
-    private let client: NavidromeClient
-    private let logger = Logger(subsystem: "com.loopapp", category: "Downloads")
+    private let logger = Logger(subsystem: "at.amtabor.loop", category: "Downloads")
     private let fileManager = FileManager.default
-    
-    // Task tracking
-    private var downloadTasks: [String: Task<Void, Never>] = [:]
-    
-    // Queue to limit concurrent downloads
-    private let maxConcurrentDownloads = 3
-    private var activeCount = 0
-    
-    init(client: NavidromeClient) {
-        self.client = client
+
+    /// Stable background URLSession. Stored as a plain let so @Observable is happy.
+    /// Created via the free function above so self is fully initialised before
+    /// being passed as delegate.
+    private var session: URLSession!
+
+    /// Maps URLSessionTask.taskIdentifier → songId so the delegate can route events.
+    private var taskIndex: [Int: String] = [:]
+
+    /// Completion handler vended by the system when the app is woken for a background session.
+    /// Must be called once all delegate events have been delivered (see LoopApp).
+    var backgroundCompletionHandler: (() -> Void)?
+
+    // MARK: - Init
+    override init() {
+        super.init()
+        // self is fully initialised here so we can safely pass it as delegate
+        session = makeBackgroundSession(delegate: self)
         createMusicDirectory()
+        reconnectPendingTasks()
     }
-    
+
     // MARK: - Public API
-    
+
     func isDownloaded(songId: String) -> Bool {
         fileManager.fileExists(atPath: localFileURL(for: songId).path)
     }
-    
+
     func localFileURL(for songId: String) -> URL {
         musicDirectory.appendingPathComponent("\(songId).mp3")
     }
-    
-    func downloadSong(song: SongDTO) {
+
+    /// Enqueue a song for download. Safe to call if already downloaded or in-flight.
+    func downloadSong(song: SongDTO, streamURL: URL) {
         let id = song.id
-        
-        print("⬇️ DownloadManager: Download requested for \(song.title) (ID: \(id))")
-        
-        // Check if already downloaded or downloading
+
         guard !isDownloaded(songId: id) else {
-            print("✅ DownloadManager: Song already downloaded")
+            logger.debug("Already downloaded: \(song.title)")
             return
         }
-        
-        guard downloadTasks[id] == nil else {
-            print("⚠️ DownloadManager: Download already in progress")
+        guard activeDownloads[id] == nil else {
+            logger.debug("Already in flight: \(song.title)")
             return
         }
-        
-        print("🚀 DownloadManager: Starting download task")
-        
-        // IMPORTANT: Add to activeDownloads IMMEDIATELY so ViewModel can detect it
+
+        logger.info("Enqueuing download: \(song.title)")
+
+        let task = session.downloadTask(with: streamURL)
+        task.taskDescription = id           // Survives suspend/resume cycles
+        taskIndex[task.taskIdentifier] = id
         activeDownloads[id] = DownloadProgress(songId: id, bytesDownloaded: 0, totalBytes: 0)
-        
-        // Create download task
-        let task = Task.detached(priority: .utility) { [weak self] in
-            await self?.performDownload(song: song)
-            return () // Explicitly return Void
-        }
-        
-        downloadTasks[id] = task
+        task.resume()
     }
-    
+
     func cancelDownload(songId: String) {
-        downloadTasks[songId]?.cancel()
-        downloadTasks.removeValue(forKey: songId)
-        activeDownloads.removeValue(forKey: songId)
+        guard let taskId = taskIndex.first(where: { $0.value == songId })?.key else { return }
+        session.getAllTasks { tasks in
+            tasks.first { $0.taskIdentifier == taskId }?.cancel()
+        }
+        taskIndex.removeValue(forKey: taskId)
+        Task { @MainActor in
+            self.activeDownloads.removeValue(forKey: songId)
+        }
     }
-    
+
     func deleteDownload(songId: String) {
         cancelDownload(songId: songId)
         try? fileManager.removeItem(at: localFileURL(for: songId))
     }
-    
+
     func deleteAlbumDownloads(songIds: [String]) {
-        for id in songIds {
-            deleteDownload(songId: id)
-        }
+        songIds.forEach { deleteDownload(songId: $0) }
     }
-    
-    // MARK: - Private Implementation
-    
+
+    // MARK: - Directory
+
     private var musicDirectory: URL {
         fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Music")
     }
-    
+
     private func createMusicDirectory() {
         try? fileManager.createDirectory(at: musicDirectory, withIntermediateDirectories: true)
     }
-    
-    private func performDownload(song: SongDTO) async {
-        let id = song.id
-        
-        print("⬇️ DownloadManager: performDownload starting for \(song.title)")
-        
-        // Note: activeDownloads entry is already created in downloadSong()
-        
-        defer {
-            Task { @MainActor in
-                activeDownloads.removeValue(forKey: id)
-                downloadTasks.removeValue(forKey: id)
+
+    // MARK: - Reconnect tasks in-flight from a previous launch
+
+    private func reconnectPendingTasks() {
+        session.getAllTasks { [weak self] tasks in
+            guard let self else { return }
+            for task in tasks {
+                guard let songId = task.taskDescription else { continue }
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    self.taskIndex[task.taskIdentifier] = songId
+                    if self.activeDownloads[songId] == nil {
+                        self.activeDownloads[songId] = DownloadProgress(
+                            songId: songId, bytesDownloaded: 0, totalBytes: 0
+                        )
+                    }
+                    self.logger.info("Reconnected in-flight download: \(songId)")
+                }
             }
         }
-        
-        do {
-            guard let url = await client.streamURL(for: id) else {
-                print("❌ DownloadManager: Failed to get stream URL")
-                throw DownloadError.invalidURL
-            }
-            
-            print("✅ DownloadManager: Got stream URL: \(url.absoluteString)")
-            
-            // Check available disk space
-            guard hasEnoughDiskSpace() else {
-                print("❌ DownloadManager: Insufficient storage")
-                throw DownloadError.insufficientStorage
-            }
-            
-            // Download with progress tracking
-            print("⬇️ DownloadManager: Starting URLSession download")
-            let (localURL, response) = try await URLSession.shared.download(from: url)
-            
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else {
-                print("❌ DownloadManager: HTTP error - status: \((response as? HTTPURLResponse)?.statusCode ?? -1)")
-                throw DownloadError.networkError
-            }
-            
-            // Move to final location
-            let destination = localFileURL(for: id)
-            if fileManager.fileExists(atPath: destination.path) {
-                try fileManager.removeItem(at: destination)
-            }
-            try fileManager.moveItem(at: localURL, to: destination)
-            
-            print("✅ DownloadManager: Downloaded successfully to \(destination.path)")
-            logger.info("Downloaded: \(song.title)")
-            
-        } catch {
-            print("❌ DownloadManager: Download failed - \(error.localizedDescription)")
-            logger.error("Download failed [\(id)]: \(error.localizedDescription)")
-        }
-    }
-    
-    private func hasEnoughDiskSpace(required: Int64 = 100_000_000) -> Bool {
-        guard let attributes = try? fileManager.attributesOfFileSystem(forPath: musicDirectory.path),
-              let freeSpace = attributes[.systemFreeSize] as? Int64 else {
-            return true // Optimistic if we can't check
-        }
-        return freeSpace > required
     }
 }
 
-// MARK: - Errors
-enum DownloadError: LocalizedError {
-    case invalidURL
-    case insufficientStorage
-    case networkError
-    
-    var errorDescription: String? {
-        switch self {
-        case .invalidURL: return "Invalid download URL"
-        case .insufficientStorage: return "Not enough storage space"
-        case .networkError: return "Network error occurred"
+// MARK: - URLSessionDownloadDelegate
+
+extension DownloadManager: URLSessionDownloadDelegate {
+
+    nonisolated func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        guard let songId = downloadTask.taskDescription else { return }
+        let progress = DownloadProgress(
+            songId: songId,
+            bytesDownloaded: totalBytesWritten,
+            totalBytes: totalBytesExpectedToWrite
+        )
+        Task { @MainActor [weak self] in
+            self?.activeDownloads[songId] = progress
+        }
+    }
+
+    nonisolated func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        guard let songId = downloadTask.taskDescription else { return }
+
+        // location is a temp file deleted after this method returns — move it synchronously.
+        let fm = FileManager.default
+        let destination = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Music/\(songId).mp3")
+
+        do {
+            if fm.fileExists(atPath: destination.path) {
+                try fm.removeItem(at: destination)
+            }
+            try fm.moveItem(at: location, to: destination)
+        } catch {
+            // Log via a detached task so we don't capture self in a nonisolated context
+            Task.detached {
+                Logger(subsystem: "at.amtabor.loop", category: "Downloads")
+                    .error("Failed to move download for \(songId): \(error.localizedDescription)")
+            }
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.activeDownloads.removeValue(forKey: songId)
+            self.taskIndex.removeValue(forKey: downloadTask.taskIdentifier)
+        }
+    }
+
+    nonisolated func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+        Task { @MainActor [weak self] in
+            self?.backgroundCompletionHandler?()
+            self?.backgroundCompletionHandler = nil
+        }
+    }
+
+    nonisolated func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        guard let error, let songId = task.taskDescription else { return }
+        let nsError = error as NSError
+        guard nsError.code != NSURLErrorCancelled else { return }
+
+        Task.detached {
+            Logger(subsystem: "at.amtabor.loop", category: "Downloads")
+                .error("Download failed for \(songId): \(error.localizedDescription)")
+        }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.activeDownloads.removeValue(forKey: songId)
+            self.taskIndex.removeValue(forKey: task.taskIdentifier)
         }
     }
 }
